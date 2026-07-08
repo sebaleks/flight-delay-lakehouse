@@ -1,0 +1,39 @@
+name: "flight_delays"
+version: "1.0.0"
+config-version: 2
+
+# Uses the "flight_delays" profile in ./dbt/profiles.yml (BigQuery, ADC).
+profile: "flight_delays"
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+analysis-paths: ["analyses"]
+
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+# Dataset names come from env vars so bronze/silver/gold are separate BigQuery
+# datasets. generate_schema_name.sql maps +schema to the dataset name verbatim.
+models:
+  flight_delays:
+    silver:
+      +materialized: view
+      +schema: "{{ env_var('BQ_SILVER_DATASET', 'flight_delays_silver') }}"
+    gold:
+      +materialized: table
+      +schema: "{{ env_var('BQ_GOLD_DATASET', 'flight_delays_gold') }}"
+      star:
+        # fact_flights, dim_airport, dim_carrier, dim_date
+        +materialized: table
+      ml:
+        # wide, flat one-row-per-flight feature mart (pre-departure features only)
+        +materialized: table
+
+# Static reference (airport coords/tz, holiday calendar) can land here as seeds.
+seeds:
+  flight_delays:
+    +schema: "{{ env_var('BQ_BRONZE_DATASET', 'flight_delays_bronze') }}"

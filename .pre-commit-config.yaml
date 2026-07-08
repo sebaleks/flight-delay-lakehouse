@@ -1,0 +1,11 @@
+# Secret scanning before anything reaches a commit. .gitignore patterns cannot
+# catch every credential filename (e.g. the GCP console's default
+# <project-id>-<12hex>.json key download), so gitleaks scans the staged
+# content itself on every commit.
+#
+# One-time setup per clone:  uv sync --group dev && uv run pre-commit install
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks

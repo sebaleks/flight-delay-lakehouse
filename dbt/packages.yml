@@ -1,0 +1,6 @@
+packages:
+  - package: dbt-labs/dbt_utils
+    version: [">=1.1.0", "<2.0.0"]
+  # Handy for building dim_date; uncomment when you implement the date dimension.
+  # - package: calogica/dbt_date
+  #   version: [">=0.10.0", "<1.0.0"]

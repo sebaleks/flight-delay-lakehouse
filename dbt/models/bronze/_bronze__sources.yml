@@ -1,0 +1,34 @@
+# Bronze sources = the raw inputs dbt reads FROM. Nothing is materialized here.
+#
+# - BTS: BigQuery EXTERNAL TABLE over the immutable bronze CSVs in GCS
+#   (created by ingestion/ or `bq mk --external_table_definition`),
+#   living in the bronze dataset ({{ env_var('BQ_BRONZE_DATASET') }}).
+# - NOAA GSOD: read in place from the public dataset (no copy into bronze).
+# - airports / holidays: dbt SEEDS, not sources — reference them with
+#   {{ ref('airports') }} / {{ ref('holidays') }} and never redeclare them
+#   here: a seed refresh over a same-named external table would clobber it.
+#   Decision + tradeoff in dbt/seeds/README.md.
+#
+# This is a SCAFFOLD STUB — tables/columns are placeholders. Fill in real
+# table names, columns, freshness, and tests when ingestion lands.
+
+version: 2
+
+sources:
+  - name: bronze
+    database: "{{ env_var('GCP_PROJECT_ID') }}"
+    schema: "{{ env_var('BQ_BRONZE_DATASET', 'flight_delays_bronze') }}"
+    description: "Immutable raw layer — external tables over GCS CSV."
+    tables:
+      - name: bts_on_time_performance
+        description: "BTS On-Time Performance 2022-2024 (partitioned year/month in GCS). TODO: columns."
+
+  - name: noaa
+    database: "bigquery-public-data"
+    schema: "noaa_gsod"
+    description: "NOAA GSOD daily weather, read in place from BigQuery public data."
+    tables:
+      - name: gsod2022
+      - name: gsod2023
+      - name: gsod2024
+      - name: stations

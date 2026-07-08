@@ -1,0 +1,18 @@
+# dbt profile for BigQuery using Application Default Credentials (ADC).
+# Local auth: `gcloud auth application-default login`.
+# No secrets in this file — everything sensitive/environmental comes from env vars,
+# so it is safe to commit. Point dbt at it with DBT_PROFILES_DIR=./dbt.
+flight_delays:
+  target: dev
+  outputs:
+    dev:
+      type: bigquery
+      method: oauth # <- Application Default Credentials (no key file)
+      project: "{{ env_var('GCP_PROJECT_ID') }}"
+      # Default dataset; per-layer models override via +schema (silver/gold).
+      dataset: "{{ env_var('BQ_SILVER_DATASET', 'flight_delays_silver') }}"
+      location: "{{ env_var('BQ_LOCATION', 'US') }}"
+      threads: 4
+      priority: interactive
+      job_execution_timeout_seconds: 600
+      job_retries: 1

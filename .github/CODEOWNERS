@@ -1,0 +1,3 @@
+# Default owner — every PR requests a review from @sebaleks.
+# Add per-path owners (e.g. /dbt/ or /ml/) as teammates take over areas.
+* @sebaleks

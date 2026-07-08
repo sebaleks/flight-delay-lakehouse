@@ -1,0 +1,61 @@
+# ---- Secrets & credentials (NEVER commit) ----
+.env
+.env.*
+!.env.example
+# Service-account keys / ADC files — we use ADC, but block keys defensively
+*-key.json
+*_key.json
+service-account*.json
+gcp-*.json
+credentials/
+application_default_credentials.json
+
+# ---- Local data (bronze lives in GCS, silver/gold in BigQuery) ----
+data/
+.data/
+*.parquet
+*.feather
+*.orc
+# NOTE: *.csv is intentionally NOT ignored so dbt seeds in dbt/seeds/ are tracked.
+
+# ---- Python / uv virtualenvs ----
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.build/
+dist/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# ---- dbt ----
+dbt/target/
+dbt/dbt_packages/
+dbt/logs/
+dbt/.user.yml
+logs/
+
+# ---- Dagster ----
+dagster_home/
+.dagster/
+tmp*/
+*.tmp
+
+# ---- ML artifacts ----
+ml/artifacts/
+mlruns/
+*.pkl
+*.joblib
+*.model
+
+# ---- OS / editor ----
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# uv.lock IS committed — do not ignore it.

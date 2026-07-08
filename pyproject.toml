@@ -1,0 +1,82 @@
+[project]
+name = "flight-delay-lakehouse"
+version = "0.1.0"
+description = "GCP lakehouse for US flight-delay analytics and ML (bronze GCS CSV -> BigQuery silver/gold via dbt, orchestrated by Dagster)."
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+license = { text = "MIT" }
+
+# Shared runtime deps used across ingestion + ml (GCP clients, dataframes, env).
+dependencies = [
+    "python-dotenv>=1.0",
+    "google-cloud-storage>=2.18",
+    "google-cloud-bigquery>=3.25",
+    "db-dtypes>=1.3",          # BigQuery -> pandas type support
+    "pandas>=2.2",
+    "pyarrow>=17.0",
+]
+
+[project.optional-dependencies]
+# Extract/load sources into bronze CSV (GCS).
+ingestion = [
+    "requests>=2.32",
+    "tqdm>=4.66",
+    "holidays>=0.57",         # generate the US holiday calendar
+]
+
+# Silver -> gold transforms. dbt Core + BigQuery adapter (ADC / method: oauth).
+transform = [
+    "dbt-core>=1.9,<2.0",
+    "dbt-bigquery>=1.9,<2.0",
+]
+
+# Orchestration. Added last; see CLAUDE.md.
+orchestration = [
+    "dagster>=1.9,<2.0",
+    "dagster-webserver>=1.9,<2.0",
+    "dagster-dbt>=0.25,<1.0",
+    "dagster-gcp>=0.25,<1.0",
+]
+
+# ML pipeline: time-based split, classification (ArrDel15) + regression (ArrDelayMinutes).
+ml = [
+    "scikit-learn>=1.5",
+    "xgboost>=2.1",
+    "numpy>=1.26",
+    "joblib>=1.4",
+    "matplotlib>=3.9",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.6",
+    "pytest>=8.3",
+    "mypy>=1.11",
+    "pre-commit>=3.8",
+    "sqlfluff>=3.1",
+    "sqlfluff-templater-dbt>=3.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# The three importable Python packages in this monorepo.
+[tool.hatch.build.targets.wheel]
+packages = ["ingestion", "ml", "orchestration"]
+
+# Dagster code location entry point (placeholder Definitions live here).
+[tool.dagster]
+module_name = "orchestration.definitions"
+code_location_name = "flight_delays"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["ingestion", "ml", "orchestration"]
+python_files = ["test_*.py", "*_test.py"]
