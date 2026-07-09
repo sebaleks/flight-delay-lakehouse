@@ -1,0 +1,99 @@
+version: 2
+
+models:
+  - name: dim_airport
+    description: Airport dimension keyed by IATA code, with geography, timezone, and mapped weather station.
+    columns:
+      - name: airport_key
+        tests: [unique, not_null]
+
+  - name: dim_carrier
+    description: Carrier dimension keyed by BTS reporting-carrier code (no display names in BTS on-time files).
+    columns:
+      - name: carrier_key
+        tests: [unique, not_null]
+
+  - name: dim_date
+    description: >
+      One row per calendar date across the flight data, with holiday flags.
+      day_of_week uses the BTS convention (1 = Monday .. 7 = Sunday).
+    columns:
+      - name: date_key
+        tests: [unique, not_null]
+
+  - name: fact_flights
+    description: >
+      One row per flight leg including cancelled/diverted legs (flags are
+      measures, not filters). Natural-key FKs to the three dimensions;
+      delay-outcome measures live here by design — the leakage boundary is
+      the ML mart (CLAUDE.md §9). Partitioned by month(date_key), clustered
+      by origin airport.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - date_key
+              - carrier_key
+              - flight_number
+              - origin_airport_key
+              - dest_airport_key
+              - crs_dep_time
+    columns:
+      - name: date_key
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_date')
+                field: date_key
+      - name: carrier_key
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_carrier')
+                field: carrier_key
+      - name: origin_airport_key
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_airport')
+                field: airport_key
+      - name: dest_airport_key
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_airport')
+                field: airport_key
+
+  - name: mart_delays_by_airport
+    description: >
+      Full-period delay/cancellation aggregates per origin airport; hist_*
+      columns are the shared training-window rates (pre-cutoff only).
+    columns:
+      - name: airport_key
+        tests: [unique, not_null]
+
+  - name: mart_delays_by_carrier
+    description: Full-period aggregates per carrier + shared training-window rates.
+    columns:
+      - name: carrier_key
+        tests: [unique, not_null]
+
+  - name: mart_delays_by_route
+    description: Full-period aggregates per directed route + shared training-window rates.
+    columns:
+      - name: route
+        tests: [unique, not_null]
+
+  - name: mart_delays_by_schedule
+    description: >
+      Aggregates on the schedule grain (year, month, day_of_week 1=Mon..7=Sun,
+      scheduled departure hour). Counts included so single-dimension rollups
+      can reweight.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [year, month, day_of_week, crs_dep_hour]
