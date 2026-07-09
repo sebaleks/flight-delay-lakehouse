@@ -36,9 +36,7 @@ def download_with_retries(
     tmp = dest.with_suffix(dest.suffix + ".part")
     for attempt in range(1, attempts + 1):
         try:
-            with requests.get(
-                url, stream=True, timeout=(connect_timeout, read_timeout)
-            ) as resp:
+            with requests.get(url, stream=True, timeout=(connect_timeout, read_timeout)) as resp:
                 resp.raise_for_status()
                 with open(tmp, "wb") as f:
                     for chunk in resp.iter_content(chunk_size=1 << 20):
@@ -53,6 +51,10 @@ def download_with_retries(
             delay = min(60, 2**attempt) + random.uniform(0, 1)
             log.warning(
                 "download attempt %d/%d for %s failed (%s); retrying in %.0fs",
-                attempt, attempts, url, exc, delay,
+                attempt,
+                attempts,
+                url,
+                exc,
+                delay,
             )
             time.sleep(delay)

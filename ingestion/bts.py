@@ -30,7 +30,7 @@ import logging
 import tempfile
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from google.api_core.exceptions import NotFound, PreconditionFailed
@@ -49,16 +49,43 @@ SOURCE_PREFIX = "bronze/bts_on_time_performance"
 
 # Columns silver/gold/ml actually depend on (subset of the ~109 in the file).
 # Validation fails a month whose header is missing any of these.
-REQUIRED_COLUMNS = frozenset({
-    "Year", "Quarter", "Month", "DayofMonth", "DayOfWeek", "FlightDate",
-    "Reporting_Airline", "Tail_Number", "Flight_Number_Reporting_Airline",
-    "Origin", "OriginAirportID", "Dest", "DestAirportID",
-    "CRSDepTime", "DepTime", "DepDelay", "DepDelayMinutes", "DepDel15",
-    "CRSArrTime", "ArrTime", "ArrDelay", "ArrDelayMinutes", "ArrDel15",
-    "Cancelled", "Diverted", "CRSElapsedTime", "AirTime", "Distance",
-    "CarrierDelay", "WeatherDelay", "NASDelay", "SecurityDelay",
-    "LateAircraftDelay",
-})
+REQUIRED_COLUMNS = frozenset(
+    {
+        "Year",
+        "Quarter",
+        "Month",
+        "DayofMonth",
+        "DayOfWeek",
+        "FlightDate",
+        "Reporting_Airline",
+        "Tail_Number",
+        "Flight_Number_Reporting_Airline",
+        "Origin",
+        "OriginAirportID",
+        "Dest",
+        "DestAirportID",
+        "CRSDepTime",
+        "DepTime",
+        "DepDelay",
+        "DepDelayMinutes",
+        "DepDel15",
+        "CRSArrTime",
+        "ArrTime",
+        "ArrDelay",
+        "ArrDelayMinutes",
+        "ArrDel15",
+        "Cancelled",
+        "Diverted",
+        "CRSElapsedTime",
+        "AirTime",
+        "Distance",
+        "CarrierDelay",
+        "WeatherDelay",
+        "NASDelay",
+        "SecurityDelay",
+        "LateAircraftDelay",
+    }
+)
 
 # US domestic months in 2022-2024 run ~537k-650k rows; a file far outside
 # these bounds is truncated or the wrong dataset.
@@ -95,9 +122,7 @@ def extract_single_csv(zip_path: Path, dest_dir: Path) -> Path:
             raise IngestError(f"corrupt zip member {bad!r} in {zip_path.name}")
         members = [m for m in zf.namelist() if m.lower().endswith(".csv")]
         if len(members) != 1:
-            raise IngestError(
-                f"expected exactly 1 CSV in {zip_path.name}, found {members!r}"
-            )
+            raise IngestError(f"expected exactly 1 CSV in {zip_path.name}, found {members!r}")
         zf.extract(members[0], dest_dir)
     return dest_dir / members[0]
 
@@ -144,8 +169,7 @@ def validate_csv(csv_path: Path, year: int, month: int) -> int:
     low, high = ROW_COUNT_BOUNDS
     if not low <= rows <= high:
         raise IngestError(
-            f"{csv_path.name} has {rows:,} data rows, outside sane bounds "
-            f"[{low:,}, {high:,}]"
+            f"{csv_path.name} has {rows:,} data rows, outside sane bounds [{low:,}, {high:,}]"
         )
     return rows
 
@@ -177,14 +201,17 @@ def ingest_month(bucket: storage.Bucket, year: int, month: int, force: bool) -> 
         size = csv_path.stat().st_size
         log.info("%d-%02d validated: %s rows, %.1f MB", year, month, f"{rows:,}", size / 1e6)
 
-        manifest = json.dumps({
-            "source_url": url,
-            "zip_member": csv_path.name,
-            "gcs_object": f"gs://{bucket.name}/{blob.name}",
-            "data_rows": rows,
-            "csv_bytes": size,
-            "ingested_at": datetime.now(timezone.utc).isoformat(),
-        }, indent=2)
+        manifest = json.dumps(
+            {
+                "source_url": url,
+                "zip_member": csv_path.name,
+                "gcs_object": f"gs://{bucket.name}/{blob.name}",
+                "data_rows": rows,
+                "csv_bytes": size,
+                "ingested_at": datetime.now(UTC).isoformat(),
+            },
+            indent=2,
+        )
 
         status = "landed"
         try:
@@ -199,7 +226,9 @@ def ingest_month(bucket: storage.Bucket, year: int, month: int, force: bool) -> 
                 blob.upload_from_filename(str(csv_path), content_type="text/csv", timeout=600)
             else:
                 blob.upload_from_filename(
-                    str(csv_path), content_type="text/csv", timeout=600,
+                    str(csv_path),
+                    content_type="text/csv",
+                    timeout=600,
                     if_generation_match=0,
                 )
         except PreconditionFailed:
@@ -236,10 +265,7 @@ def main() -> None:
     months = list(iter_months(args.start, args.end))
     results: dict[str, list[str]] = {"landed": [], "skipped": [], "failed": []}
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        futures = {
-            pool.submit(ingest_month, bucket, y, m, args.force): (y, m)
-            for y, m in months
-        }
+        futures = {pool.submit(ingest_month, bucket, y, m, args.force): (y, m) for y, m in months}
         try:
             for fut in as_completed(futures):
                 year, month = futures[fut]
@@ -256,7 +282,9 @@ def main() -> None:
 
     log.info(
         "done: %d landed, %d skipped, %d failed%s",
-        len(results["landed"]), len(results["skipped"]), len(results["failed"]),
+        len(results["landed"]),
+        len(results["skipped"]),
+        len(results["failed"]),
         f" ({sorted(results['failed'])})" if results["failed"] else "",
     )
     if results["failed"]:

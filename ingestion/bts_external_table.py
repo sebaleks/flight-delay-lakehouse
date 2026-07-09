@@ -41,8 +41,7 @@ def read_landed_header(gcs: storage.Client, bucket_name: str) -> list[str]:
     """Read the header row of the first landed bronze CSV (first 64 KiB)."""
     bucket = gcs.bucket(bucket_name)
     blob = next(
-        (b for b in gcs.list_blobs(bucket, prefix=f"{SOURCE_PREFIX}/")
-         if b.name.endswith(".csv")),
+        (b for b in gcs.list_blobs(bucket, prefix=f"{SOURCE_PREFIX}/") if b.name.endswith(".csv")),
         None,
     )
     if blob is None:

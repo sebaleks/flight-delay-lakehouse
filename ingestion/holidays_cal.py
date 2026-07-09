@@ -38,21 +38,21 @@ def main() -> None:
     if args.start_year > args.end_year:
         parser.error("--start-year is after --end-year")
 
-    us = holidays.country_holidays(
-        "US", years=range(args.start_year - 1, args.end_year + 2)
-    )
+    us = holidays.country_holidays("US", years=range(args.start_year - 1, args.end_year + 2))
 
     rows = []
     day = date(args.start_year, 1, 1)
     end = date(args.end_year, 12, 31)
     while day <= end:
-        rows.append({
-            "date_day": day.isoformat(),
-            "is_holiday": int(day in us),
-            "holiday_name": us.get(day, ""),
-            "is_day_before_holiday": int(day + timedelta(days=1) in us),
-            "is_day_after_holiday": int(day - timedelta(days=1) in us),
-        })
+        rows.append(
+            {
+                "date_day": day.isoformat(),
+                "is_holiday": int(day in us),
+                "holiday_name": us.get(day, ""),
+                "is_day_before_holiday": int(day + timedelta(days=1) in us),
+                "is_day_after_holiday": int(day - timedelta(days=1) in us),
+            }
+        )
         day += timedelta(days=1)
 
     SEED_PATH.parent.mkdir(parents=True, exist_ok=True)
