@@ -316,6 +316,7 @@ DXR,KDXR,Danbury Municipal Airport,Danbury,United States,41.371498107899995,-73.
 DYL,KDYL,Doylestown Airport,Doylestown,United States,40.3330001831,-75.1222991943,394,America/New_York
 DYS,KDYS,Dyess Air Force Base,Abilene,United States,32.4207992554,-99.854598999,1789,America/Chicago
 EAA,PAEG,Eagle Airport,Eagle,United States,64.77639771,-141.151001,908,America/Anchorage
+EAR,KEAR,Kearney Regional Airport,Kearney,United States,40.727001,-99.006798,2131,America/Chicago
 EAT,KEAT,Pangborn Memorial Airport,Wenatchee,United States,47.3988990784,-120.207000732,1249,America/Los_Angeles
 EAU,KEAU,Chippewa Valley Regional Airport,Eau Claire,United States,44.86579895019531,-91.48429870605469,913,America/Chicago
 ECA,K6D9,Iosco County Airport,East Tawas,United States,44.312801,-83.422302,606,America/New_York
@@ -554,6 +555,7 @@ IAN,PAIK,Bob Baker Memorial Airport,Kiana,United States,66.9759979248,-160.43699
 ICT,KICT,Wichita Eisenhower National Airport,Wichita,United States,37.649899,-97.433098,1333,America/Chicago
 IDA,KIDA,Idaho Falls Regional Airport,Idaho Falls,United States,43.514599,-112.070999,4744,America/Denver
 IDP,KIDP,Independence Municipal Airport,Independence,United States,37.1584014893,-95.77839660640001,825,
+IFP,KIFP,Laughlin Bullhead International Airport,Bullhead City,United States,35.154726,-114.559322,701,America/Phoenix
 IGG,PAIG,Igiugig Airport,Igiugig,United States,59.32400131225586,-155.90199279785156,90,America/Anchorage
 IKB,KUKF,Wilkes County Airport,North Wilkesboro,United States,36.2228012085,-81.09829711910001,1301,America/New_York
 IKK,KIKK,Greater Kankakee Airport,Kankakee,United States,41.07139968869999,-87.8462982178,630,America/Chicago
@@ -1262,6 +1264,7 @@ WWR,KWWR,West Woodward Airport,Woodward,United States,36.438,-99.5226667,2189,
 WYS,KWYS,Yellowstone Airport,West Yellowstone,United States,44.68840027,-111.1179962,6649,America/Denver
 XNA,KXNA,Northwest Arkansas Regional Airport,Bentonville,United States,36.281898,-94.306801,1287,America/Chicago
 XSD,KTNX,Tonopah Test Range Airport,Tonopah,United States,37.7988014221,-116.78099823,5549,America/Los_Angeles
+XWA,KXWA,Williston Basin International Airport,Williston,United States,48.260863,-103.75116,2344,America/Chicago
 YAK,PAYA,Yakutat Airport,Yakutat,United States,59.5032997131,-139.660003662,33,America/Anchorage
 YIP,KYIP,Willow Run Airport,Detroit,United States,42.23789978,-83.53040314,716,America/New_York
 YKM,KYKM,Yakima Air Terminal McAllister Field,Yakima,United States,46.56819916,-120.5439987,1099,America/Los_Angeles

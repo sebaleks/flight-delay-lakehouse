@@ -46,6 +46,21 @@ OUTPUT_COLUMNS = [
     "latitude", "longitude", "elevation_ft", "tz",
 ]
 
+# BTS-active airports missing from OpenFlights (stale for post-2017 openings).
+# Coordinates/elevation from OurAirports; tz curated. Gap-fill only: an
+# upstream OpenFlights row with the same IATA code takes precedence.
+SUPPLEMENTS = [
+    {"iata": "XWA", "icao": "KXWA", "name": "Williston Basin International Airport",
+     "city": "Williston", "country": "United States", "latitude": "48.260863",
+     "longitude": "-103.75116", "elevation_ft": "2344", "tz": "America/Chicago"},
+    {"iata": "EAR", "icao": "KEAR", "name": "Kearney Regional Airport",
+     "city": "Kearney", "country": "United States", "latitude": "40.727001",
+     "longitude": "-99.006798", "elevation_ft": "2131", "tz": "America/Chicago"},
+    {"iata": "IFP", "icao": "KIFP", "name": "Laughlin Bullhead International Airport",
+     "city": "Bullhead City", "country": "United States", "latitude": "35.154726",
+     "longitude": "-114.559322", "elevation_ft": "701", "tz": "America/Phoenix"},
+]
+
 
 def is_us_airport(row: dict[str, str]) -> bool:
     iata = row["iata"]
@@ -78,6 +93,13 @@ def build_seed(raw_path: Path) -> list[dict[str, str]]:
             "latitude": r["latitude"], "longitude": r["longitude"],
             "elevation_ft": r["altitude_ft"], "tz": tz,
         })
+    for extra in SUPPLEMENTS:
+        if extra["iata"] not in seen:
+            seen.add(extra["iata"])
+            out.append(dict(extra))
+        else:
+            log.info("supplement %s now covered upstream", extra["iata"])
+    out.sort(key=lambda r: r["iata"])
     return out
 
 
