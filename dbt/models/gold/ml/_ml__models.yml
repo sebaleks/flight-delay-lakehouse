@@ -1,0 +1,89 @@
+version: 2
+
+models:
+  - name: ml_flight_features
+    description: >
+      THE ML feature mart (leakage boundary, CLAUDE.md §9): one wide flat row
+      per completed flight (not cancelled, not diverted, labels present).
+      Features are pre-departure-only: schedule attributes, shared
+      training-window historical rates (leave-one-out adjusted for training
+      rows so no row's feature contains its own label; NULL for entities new
+      in the test window — never zero-filled), PRIOR-DAY GSOD origin weather
+      (obs_date = flight_date - 1, strictly pre-departure; lag pinned by
+      assert_ml_weather_is_prior_day, has_origin_weather = prior-day
+      observation exists), and holiday flags. Labels carry the label_ prefix
+      and are the only
+      post-departure columns; assert_ml_features_no_leakage pins the schema
+      to the audited column allowlist. Split on is_training_row (or
+      flight_date) — never randomly; anyone carving a validation slice from
+      the training window must re-derive hist_* as-of that slice.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - flight_date
+              - carrier
+              - flight_number
+              - origin
+              - dest
+              - crs_dep_time
+    columns:
+      - name: flight_date
+        tests: [not_null]
+      - name: carrier
+        tests: [not_null]
+      - name: origin
+        tests: [not_null]
+      - name: dest
+        tests: [not_null]
+      - name: distance
+        tests: [not_null]
+      - name: crs_dep_hour
+        description: Scheduled departure hour, local time, 0-23.
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 23
+      - name: day_of_week
+        description: BTS convention, 1 = Monday .. 7 = Sunday.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [1, 2, 3, 4, 5, 6, 7]
+                quote: false
+      - name: crs_dep_time
+        description: Scheduled departure time (local) — part of the natural key.
+        tests: [not_null]
+      - name: hist_route_arr_del15_rate
+        description: >
+          Training-window route delay rate from the shared model. Training
+          rows are leave-one-out adjusted (own outcome removed; NULL when the
+          row was the route's only pre-cutoff flight); test rows carry the
+          raw shared rate. NULL when the route has no pre-cutoff flights.
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1
+      - name: hist_dest_arr_del15_rate
+        description: >
+          OUTBOUND (origin-grain) delay rate of the destination airport — a
+          congestion propensity proxy, not inbound arrival performance.
+      - name: is_training_row
+        description: flight_date < var('train_test_cutoff_date'); the time-based split marker.
+        tests: [not_null]
+      - name: label_arr_del15
+        description: Classification label — arrival delayed >= 15 minutes.
+        tests: [not_null]
+      - name: label_arr_delay_minutes
+        description: Regression label — arrival delay in minutes (0 for early/on-time).
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+              config:
+                severity: warn
