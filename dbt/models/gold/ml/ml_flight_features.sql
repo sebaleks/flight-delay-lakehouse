@@ -16,8 +16,12 @@
 --     (pre-cutoff flights only). For TRAINING rows the row's own outcome is
 --     removed with a LEAVE-ONE-OUT adjustment computed algebraically from the
 --     shared model's n and rate — so no training row's feature contains its
---     own label, and the rate definition still lives exactly once. Test rows
---     keep the raw rates (they are not in the aggregate at all).
+--     own label, and the rate definition still lives exactly once. LOO
+--     applies only to route/carrier/origin, where the flight is inside its
+--     own aggregate; hist_dest_* stays raw for all rows because the
+--     destination's outbound aggregate never contains the arriving flight
+--     (leave-one-out by construction). Test rows keep the raw rates
+--     (they are not in any aggregate at all).
 --     Remaining documented property: training-row rates aggregate the whole
 --     pre-cutoff window (a 2022 row sees 2023 peers' outcomes). Accepted:
 --     the shared-model requirement (one definition for marts + ML) rules out
@@ -126,10 +130,13 @@ select
     day_of_week,
     month,
 
-    -- shared historical delay rates. Training rows: leave-one-out (own
-    -- outcome removed; NULL when the row was the entity's only pre-cutoff
-    -- flight). Test rows: raw shared rates (never in the aggregate).
-    {% for grain in ['route', 'carrier', 'origin', 'dest'] %}
+    -- shared historical delay rates. LOO applies ONLY where the flight is
+    -- genuinely inside its own aggregate: route, carrier, and origin (the
+    -- airport level is origin-grain). Training rows there get leave-one-out
+    -- (own outcome removed; NULL when the row was the entity's only
+    -- pre-cutoff flight). Test rows: raw shared rates (never in the
+    -- aggregate).
+    {% for grain in ['route', 'carrier', 'origin'] %}
     case
         when not is_training_row then {{ grain }}_rate_raw
         when {{ grain }}_n_raw > 1
@@ -147,6 +154,15 @@ select
         else {{ grain }}_n_raw - 1
     end as hist_{{ grain }}_n_flights,
     {% endfor %}
+
+    -- hist_dest_*: the destination airport's OUTBOUND aggregate. An arriving
+    -- flight is never part of it, so the raw lookup is already leave-one-out
+    -- by construction — applying the LOO algebra here would subtract an
+    -- outcome that was never in the sum (and force valid single-flight
+    -- airports to NULL). Raw for all rows, training included.
+    dest_rate_raw as hist_dest_arr_del15_rate,
+    dest_avg_raw as hist_dest_avg_arr_delay_minutes,
+    dest_n_raw as hist_dest_n_flights,
 
     -- origin weather for the flight date (daily GSOD; see header note)
     mean_temp_f as origin_mean_temp_f,

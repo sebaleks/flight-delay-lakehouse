@@ -71,7 +71,9 @@ models:
       - name: hist_dest_arr_del15_rate
         description: >
           OUTBOUND (origin-grain) delay rate of the destination airport — a
-          congestion propensity proxy, not inbound arrival performance.
+          congestion propensity proxy, not inbound arrival performance. Raw
+          shared rate for ALL rows: the arriving flight is never in this
+          aggregate, so it is leave-one-out by construction (no LOO algebra).
       - name: is_training_row
         description: flight_date < var('train_test_cutoff_date'); the time-based split marker.
         tests: [not_null]
