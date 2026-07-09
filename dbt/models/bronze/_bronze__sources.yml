@@ -21,7 +21,14 @@ sources:
     description: "Immutable raw layer — external tables over GCS CSV."
     tables:
       - name: bts_on_time_performance
-        description: "BTS On-Time Performance 2022-2024 (partitioned year/month in GCS). TODO: columns."
+        description: >
+          BTS On-Time Performance 2022-2024, external table over the bronze
+          CSVs (hive-partitioned year/month; created by
+          ingestion/bts_external_table.py). All file columns are STRING —
+          silver casts. Quirks: the file's Year/Month columns are exposed as
+          Year_file/Month_file (they collide with the hive partition keys —
+          use the `year`/`month` partition columns instead), and the BTS
+          trailing-comma column is exposed as `trailing_empty` (ignore).
 
   - name: noaa
     database: "bigquery-public-data"

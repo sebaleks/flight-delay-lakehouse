@@ -35,7 +35,9 @@ predict flight delays using **only information known before departure**.
   `gs://<bucket>/bronze/<source>/year=<YYYY>/month=<MM>/*.csv`.
   Bronze is exposed to BigQuery as **external tables** in the `bronze` dataset
   (dbt reads these as `sources`). We never rewrite bronze in place; corrections
-  land as new partitions.
+  land as new partitions. One documented exception: `ingestion.bts --force` is
+  a repair-only deviation that rewrites a partition in place and logs loudly —
+  never for routine updates.
 - **Silver** = cleaned, typed, conformed BigQuery tables/views (deduped, casted,
   standardized keys). Rebuildable from bronze.
 - **Gold** = analytics-ready BigQuery tables (star schema + ML mart).
