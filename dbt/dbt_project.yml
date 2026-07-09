@@ -35,6 +35,18 @@ models:
         # wide, flat one-row-per-flight feature mart (pre-departure features only)
         +materialized: table
 
+# ---------------------------------------------------------------------------
+# TRAIN/TEST BOUNDARY (leakage-critical — CLAUDE.md §9: time-based, never
+# random). Training window: 2022-01-01 (data start) up to but EXCLUDING this
+# date; test window: this date through 2024-12-31 (~last 6 months, ≈17%).
+# The shared historical-delay-rate model (int_historical_delay_rates) filters
+# on this var so no test-period outcome can leak backward into a feature, and
+# ml_flight_features derives its is_training_row column from the same value.
+# Change it HERE only — no model may inline a cutoff literal.
+# ---------------------------------------------------------------------------
+vars:
+  train_test_cutoff_date: "2024-07-01"
+
 # Static reference (airport coords/tz, holiday calendar) can land here as seeds.
 seeds:
   flight_delays:
