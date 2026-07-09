@@ -21,7 +21,9 @@ clean-targets:
 models:
   flight_delays:
     silver:
-      +materialized: view
+      # native tables per CLAUDE.md §3 — a view here would re-scan the bronze
+      # GCS CSVs on every downstream query
+      +materialized: table
       +schema: "{{ env_var('BQ_SILVER_DATASET', 'flight_delays_silver') }}"
     gold:
       +materialized: table

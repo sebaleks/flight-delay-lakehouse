@@ -1,0 +1,160 @@
+version: 2
+
+models:
+  - name: stg_bts_flights
+    description: >
+      One row per US domestic flight leg 2022-2024, cleaned and typed from
+      bronze. Full column superset INCLUDING post-departure/arrival outcomes
+      (dep_delay, taxi/wheels times, actual elapsed/air time, arrival fields):
+      analytics uses delay outcomes; the pre-departure leakage boundary is
+      enforced at the gold ML feature mart (CLAUDE.md §9), not here.
+      Deduplicated on the natural flight key (currently a no-op: bronze has
+      zero duplicate keys, verified 2026-07-09). No rows are filtered.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - flight_date
+              - reporting_airline
+              - flight_number_reporting_airline
+              - origin
+              - dest
+              - crs_dep_time
+    columns:
+      - name: flight_date
+        tests: [not_null]
+      - name: reporting_airline
+        tests: [not_null]
+      - name: origin
+        description: Origin airport code, uppercased (matches stg_airports.iata).
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_airports')
+                field: iata
+      - name: dest
+        description: Destination airport code, uppercased (matches stg_airports.iata).
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_airports')
+                field: iata
+      - name: arr_del15
+        description: >
+          Label for the classifier (arrival delay >= 15 min). NULL for
+          cancelled/diverted-without-arrival legs. Post-departure outcome —
+          allowed in silver and the gold star, forbidden as an ML feature.
+      - name: arr_delay_minutes
+        description: Label for the regressor. Post-departure outcome.
+
+  - name: stg_airports
+    description: >
+      US airport reference (incl. territories) from the airports SEED via
+      ref() — covers all 375 airport codes present in BTS 2022-2024.
+    columns:
+      - name: iata
+        tests: [unique, not_null]
+
+  - name: stg_holidays
+    description: >
+      US federal holiday calendar 2022-2024 with day-before/day-after flags,
+      from the holidays SEED via ref().
+    columns:
+      - name: date_day
+        tests: [unique, not_null]
+
+  - name: stg_weather
+    description: >
+      NOAA GSOD daily surface summaries 2022-2024 read in place from
+      bigquery-public-data.noaa_gsod (all stations); sentinel values
+      (9999.9/999.9/99.99) nulled, GSOD units kept (°F, knots, miles, inches).
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [station_id, obs_date]
+          config:
+            severity: warn # public-data quirk tolerance; investigate on warn
+    columns:
+      - name: station_id
+        tests: [not_null]
+      - name: obs_date
+        tests: [not_null]
+      - name: mean_station_pressure_mb
+        description: >
+          Decoded from GSOD stp: 999.9 missing marker nulled, and the
+          dropped-leading-'1000' truncation reversed (stored 13.5 = 1013.5 mb).
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 450
+                max_value: 1090
+              config:
+                severity: warn
+
+  - name: stg_weather_stations
+    description: NOAA station registry, one row per station_id.
+    columns:
+      - name: station_id
+        tests: [unique, not_null]
+
+  - name: silver_flights
+    description: >
+      THE silver flights table: stg_bts_flights (full column superset, one row
+      per flight leg) enriched with origin/dest airport coordinates, elevation
+      and IANA timezone. Left joins on unique iata cannot fan out: row count
+      is identical to stg_bts_flights (20,656,085 at build time).
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - flight_date
+              - reporting_airline
+              - flight_number_reporting_airline
+              - origin
+              - dest
+              - crs_dep_time
+    columns:
+      - name: origin_tz
+        description: IANA timezone of the origin airport (for local-time features later).
+        tests: [not_null]
+      - name: dest_tz
+        tests: [not_null]
+
+  - name: airport_station_map
+    description: >
+      Each reference airport mapped to its nearest NOAA GSOD station by
+      geodesic distance, candidates restricted to stations with coordinates
+      and >= 900 observation days in 2022-2024. distance_km kept for audit.
+    columns:
+      - name: iata
+        tests: [unique, not_null]
+      - name: station_id
+        tests: [not_null]
+      - name: distance_km
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 150
+              config:
+                severity: warn # a far-away nearest station is suspicious, not fatal
+
+  - name: silver_weather
+    description: >
+      GSOD observations restricted to stations referenced by
+      airport_station_map (relevance filter; full feed stays in stg_weather).
+      Mapped stations can gap on individual dates — consumers must LEFT JOIN
+      and treat missing weather as a signal, never inner join.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [station_id, obs_date]
+          config:
+            severity: warn
+    columns:
+      - name: station_id
+        tests: [not_null]
+      - name: obs_date
+        tests: [not_null]
