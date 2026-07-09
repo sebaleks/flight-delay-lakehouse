@@ -1,0 +1,66 @@
+# Minimal PR gate — the bridge before fuller CI (pytest, sqlfluff, Dagster
+# definitions check, nightly BigQuery job). Keep this lean; add scope there.
+#
+# All three checks are credential-free and never touch the cloud:
+# - gitleaks: history scan, pinned to the same version as the pre-commit hook,
+#   backstop for clones that never ran `pre-commit install`
+# - dbt parse: offline (method: oauth opens no connection at parse time);
+#   placeholder env values satisfy env_var() so no real identifiers enter CI
+# - ruff: lint + format over the Python packages
+
+name: pr-checks
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  GCP_PROJECT_ID: ci-placeholder-project
+  GCS_BUCKET: ci-placeholder-bucket
+  BQ_LOCATION: US
+  BQ_BRONZE_DATASET: flight_delays_bronze
+  BQ_SILVER_DATASET: flight_delays_silver
+  BQ_GOLD_DATASET: flight_delays_gold
+  DBT_PROFILES_DIR: dbt
+
+jobs:
+  pr-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # gitleaks scans the full history, not just HEAD
+
+      - name: gitleaks (pinned to match the pre-commit hook)
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
+            | tar -xz -C /tmp gitleaks
+          /tmp/gitleaks git . --redact --no-banner
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # python version comes from .python-version (3.12); only the transform
+      # extra + dev group are installed to keep CI fast
+      - name: install transform extra + dev group
+        run: uv sync --extra transform --group dev
+
+      - name: dbt parse
+        run: |
+          uv run dbt deps --project-dir dbt
+          uv run dbt parse --project-dir dbt --profiles-dir dbt
+
+      - name: ruff
+        run: |
+          uv run ruff check ingestion ml orchestration
+          uv run ruff format --check ingestion ml orchestration
