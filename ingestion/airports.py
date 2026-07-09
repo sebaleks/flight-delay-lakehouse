@@ -66,6 +66,13 @@ OUTPUT_COLUMNS = [
     "tz",
 ]
 
+# Upstream rows whose OpenFlights tz is \N but the airport is BTS-active —
+# a NULL tz would break local-time features downstream (silver tests pin
+# tz not_null for flown airports).
+TZ_BACKFILL = {
+    "BIH": "America/Los_Angeles",  # Eastern Sierra Regional, Bishop CA
+}
+
 # BTS-active airports missing from OpenFlights (stale for post-2017 openings).
 # Coordinates/elevation from OurAirports; tz curated. Gap-fill only: an
 # upstream OpenFlights row with the same IATA code takes precedence.
@@ -131,6 +138,9 @@ def build_seed(raw_path: Path) -> list[dict[str, str]]:
             continue
         seen.add(r["iata"])
         tz = "" if r["tz"] == "\\N" else r["tz"]
+        if not tz and r["iata"] in TZ_BACKFILL:
+            tz = TZ_BACKFILL[r["iata"]]
+            log.info("backfilled tz for %s: %s", r["iata"], tz)
         out.append(
             {
                 "iata": r["iata"],
