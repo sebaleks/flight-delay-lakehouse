@@ -8,8 +8,14 @@
 --
 -- Measure from EXECUTED job statistics (dry-run bytes are an UPPER_BOUND
 -- estimate for clustered tables, not exact). Run each block as its OWN job
--- with the cache disabled — paste one block per invocation:
---   bq query --nouse_legacy_sql --nouse_cache --job_id=<id> '<block>'
+-- with the cache disabled. Feed the SQL on stdin via a heredoc with a QUOTED
+-- delimiter — the blocks contain single-quoted literals ('2024-06-01', 'ORD')
+-- that break if the SQL itself is shell-quoted:
+--
+--   bq query --nouse_legacy_sql --nouse_cache --job_id=<id> <<'SQL'
+--   <paste exactly one block here>
+--   SQL
+--
 --   bq show --format=prettyjson -j <id>   # statistics.query.totalBytesProcessed / totalBytesBilled
 
 
