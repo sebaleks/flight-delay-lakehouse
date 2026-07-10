@@ -90,10 +90,25 @@ models:
 
   - name: mart_delays_by_schedule
     description: >
-      Aggregates on the schedule grain (year, month, day_of_week 1=Mon..7=Sun,
-      scheduled departure hour). Counts included so single-dimension rollups
-      can reweight.
+      Schedule-grain mart (year, month, day_of_week 1=Mon..7=Sun, scheduled
+      departure hour) carrying ADDITIVE counts and sums only — no pre-divided
+      rates; consumers compute rates as SUM/SUM so rollups can never average
+      averages. The single fact_flights aggregation for the time cuts;
+      dash_delays_by_time is a thin skin over this table.
     tests:
       - dbt_utils.unique_combination_of_columns:
           arguments:
             combination_of_columns: [year, month, day_of_week, crs_dep_hour]
+    columns:
+      - name: n_with_arr_outcome
+        tests: [not_null]
+
+  - name: mart_delays_monthly
+    description: >
+      Monthly mart (one row per calendar month, true DATE month_start for time
+      series and YoY) carrying ADDITIVE counts and sums only. The single
+      fact_flights aggregation for the trend; dash_monthly_trend is a thin
+      skin over this table.
+    columns:
+      - name: month_start
+        tests: [unique, not_null]

@@ -1,8 +1,10 @@
 # Flight-Delay Dashboard — Looker Studio spec
 
 Five purpose-built gold views power the dashboard (project `de-flight-project`,
-dataset `flight_delays_gold`). They are thin views over the dbt marts — always
-fresh, tiny scans (the biggest source is ~6k rows).
+dataset `flight_delays_gold`). Every view is a THIN skin over a materialized
+gold mart (label/name columns only, no aggregation) — no dashboard source
+aggregates fact_flights at query time, so Looker's live connector re-running a
+source per interaction scans at most ~7.6k pre-aggregated rows, never 20.6M.
 
 | View | Grain | Powers |
 |---|---|---|
@@ -101,5 +103,8 @@ pre-computed rate column.
   (pre-2024-07) rates from the shared ML model — if shown, label them
   "historical (through Jun 2024)"; don't mix them into full-period charts.
 - `day_of_week` is BTS convention: 1 = Monday … 7 = Sunday.
-- All five sources are views: dashboards always reflect the latest dbt build;
-  a full page load scans well under 1 MB.
+- All five sources are views backed by materialized marts (the time and
+  monthly grains are the tables mart_delays_by_schedule and
+  mart_delays_monthly): dashboards always reflect the latest dbt build, and a
+  full page load scans well under 1 MB even with Looker re-querying per
+  interaction.

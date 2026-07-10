@@ -1,25 +1,26 @@
 {{ config(materialized='view') }}
 
 -- Looker Studio source: when delays happen — hour of day, day of week, month,
--- season. Grain: (year, month, day_of_week, dep_hour), ~6k rows. Carries
--- ADDITIVE counts and sums so any rollup (hour only, season only, ...) stays
--- correct via calculated fields (SUM(n_arr_del15)/SUM(n_with_arr_outcome));
--- never average the rate columns of pre-aggregated rows.
+-- season. THIN view over mart_delays_by_schedule (a materialized TABLE): adds
+-- display labels only, no aggregation, and never touches fact_flights — every
+-- Looker interaction scans ~6k pre-aggregated rows. Additive counts pass
+-- through 1:1; rates are calculated fields in Looker
+-- (SUM(n_arr_del15)/SUM(n_with_arr_outcome)) — never averaged rate columns.
 
 select
-    extract(year from date_key) as year,
-    extract(month from date_key) as month,
-    format_date('%b', date_key) as month_name,
+    year,
+    month,
+    format_date('%b', date(year, month, 1)) as month_name,
     case
-        when extract(month from date_key) in (12, 1, 2) then 'Winter'
-        when extract(month from date_key) between 3 and 5 then 'Spring'
-        when extract(month from date_key) between 6 and 8 then 'Summer'
+        when month in (12, 1, 2) then 'Winter'
+        when month between 3 and 5 then 'Spring'
+        when month between 6 and 8 then 'Summer'
         else 'Fall'
     end as season,
     case
-        when extract(month from date_key) in (12, 1, 2) then 1
-        when extract(month from date_key) between 3 and 5 then 2
-        when extract(month from date_key) between 6 and 8 then 3
+        when month in (12, 1, 2) then 1
+        when month between 3 and 5 then 2
+        when month between 6 and 8 then 3
         else 4
     end as season_order,
     day_of_week,  -- BTS convention: 1 = Monday .. 7 = Sunday
@@ -29,12 +30,11 @@ select
         when 7 then 'Sun'
     end as day_name,
     crs_dep_hour as dep_hour,
-    count(*) as n_flights,
-    countif(arr_del15 is not null) as n_with_arr_outcome,
-    countif(arr_del15) as n_arr_del15,
-    countif(cancelled) as n_cancelled,
-    countif(diverted) as n_diverted,
-    sum(arr_delay_minutes) as sum_arr_delay_minutes,
-    sum(dep_delay_minutes) as sum_dep_delay_minutes
-from {{ ref('fact_flights') }}
-group by year, month, month_name, season, season_order, day_of_week, day_name, dep_hour
+    n_flights,
+    n_with_arr_outcome,
+    n_arr_del15,
+    n_cancelled,
+    n_diverted,
+    sum_arr_delay_minutes,
+    sum_dep_delay_minutes
+from {{ ref('mart_delays_by_schedule') }}
