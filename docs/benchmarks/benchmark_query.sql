@@ -17,10 +17,22 @@
 --   SQL
 --
 --   bq show --format=prettyjson -j <id>   # statistics.query.totalBytesProcessed / totalBytesBilled
+--
+-- Job ids are UNIQUE per project: use a fresh <id> for every run (the README's
+-- 3 runs/variant needs six, e.g. opt_1..opt_3, base_1..base_3). Reusing an id
+-- fails with "Already Exists" — and `bq show -j` would then return the FIRST
+-- job's statistics, silently recording the wrong run.
+--
+-- Do NOT pipe this whole file to bq: two statements become one SCRIPT job
+-- whose parent statistics blend BOTH variants. One block per invocation.
+--
+-- Teardown — after measuring, remove the baseline copy (it is not dbt-managed):
+--   DROP TABLE `de-flight-project.flight_delays_gold.fact_flights_benchmark_baseline`;
 
 
 -- ============================================================================
--- BLOCK 1 — OPTIMIZED: fact_flights (month partitions + origin clustering)
+-- BLOCK 1 — OPTIMIZED: fact_flights (month partitions; clustered by
+-- origin/dest/carrier — this query prunes on the first clustering column)
 -- ============================================================================
 SELECT
   carrier_key,

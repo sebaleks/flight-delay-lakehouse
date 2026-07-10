@@ -36,10 +36,13 @@ executed `totalBytesProcessed` is exact for clustered tables.
 
 ## Method
 
-- Query: `benchmark_query.sql` — carrier delay ranking filtered to one month
-  (`date_key`, the partition column) and one origin airport
-  (`origin_airport_key`, the first clustering column); the exact drill-down a
-  dashboard fires.
+- Queries: `benchmark_query.sql` — TWO labeled blocks, identical except the
+  table (block 1 = optimized `fact_flights`, block 2 = the baseline copy):
+  carrier delay ranking filtered to one month (`date_key`, the partition
+  column) and one origin airport (`origin_airport_key`, the first clustering
+  column); the exact drill-down a dashboard fires. Run **one block per job**
+  with a fresh job id each run, per the file header — never pipe the whole
+  file (two statements become one SCRIPT job whose stats blend the variants).
 - **Bytes and runtimes come from executed job statistics**
   (`statistics.query.totalBytesProcessed` / `totalBytesBilled`, job
   `startTime`→`endTime`), which are exact for clustered and unclustered tables
