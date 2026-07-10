@@ -1,0 +1,41 @@
+version: 2
+
+models:
+  - name: dash_airport_reliability
+    description: >
+      Looker source, one row per origin airport (full period 2022-2024).
+      Rates are display-safe at this grain; the dashboard filters to
+      n_flight_legs >= 10,000 for rankings.
+    columns:
+      - name: airport_key
+        tests: [unique, not_null]
+
+  - name: dash_carrier_reliability
+    description: Looker source, one row per carrier (full period).
+    columns:
+      - name: carrier_key
+        tests: [unique, not_null]
+
+  - name: dash_delays_by_time
+    description: >
+      Looker source at (year, month, day_of_week, dep_hour) grain with
+      ADDITIVE counts/sums; rates must be computed as calculated fields
+      (SUM(n_arr_del15)/SUM(n_with_arr_outcome)) — never averaged.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [year, month, day_of_week, dep_hour]
+
+  - name: dash_monthly_trend
+    description: >
+      Looker source, one row per calendar month (36 rows) with a true DATE
+      column for time series and YoY comparison, plus additive counts.
+    columns:
+      - name: month_start
+        tests: [unique, not_null]
+
+  - name: dash_route_drilldown
+    description: Looker source, one row per directed route with airport names.
+    columns:
+      - name: route
+        tests: [unique, not_null]
