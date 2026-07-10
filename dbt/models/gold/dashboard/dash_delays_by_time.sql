@@ -32,6 +32,7 @@ select
     crs_dep_hour as dep_hour,
     n_flights,
     n_with_arr_outcome,
+    n_with_dep_outcome,
     n_arr_del15,
     n_cancelled,
     n_diverted,

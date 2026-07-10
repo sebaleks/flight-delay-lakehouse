@@ -34,6 +34,10 @@ pre-computed rate column.
      - `Delay rate` = `SUM(n_arr_del15) / SUM(n_with_arr_outcome)` (Percent)
      - `Cancellation rate (agg)` = `SUM(n_cancelled) / SUM(n_flights)` (Percent)
      - `Avg arrival delay (min)` = `SUM(sum_arr_delay_minutes) / SUM(n_with_arr_outcome)`
+     - `Avg departure delay (min)` = `SUM(sum_dep_delay_minutes) / SUM(n_with_dep_outcome)`
+       (its own denominator — 60,576 flights departed and were then
+       cancelled/diverted, so neither `n_flights` nor `n_with_arr_outcome`
+       is the departure-delay population)
    - on `dash_airport_reliability` and `dash_route_drilldown`: none needed —
      rates are display-safe at their native grain.
 6. Set the report theme, then build pages per the layout below.

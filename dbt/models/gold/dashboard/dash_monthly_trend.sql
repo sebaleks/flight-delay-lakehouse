@@ -13,6 +13,7 @@ select
     format_date('%b', month_start) as month_name,
     n_flights,
     n_with_arr_outcome,
+    n_with_dep_outcome,
     n_arr_del15,
     n_cancelled,
     n_diverted,

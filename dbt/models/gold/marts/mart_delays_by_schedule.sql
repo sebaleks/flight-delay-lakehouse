@@ -14,6 +14,7 @@ select
     crs_dep_hour,
     count(*) as n_flights,
     countif(arr_del15 is not null) as n_with_arr_outcome,
+    countif(dep_delay_minutes is not null) as n_with_dep_outcome,
     countif(arr_del15) as n_arr_del15,
     countif(cancelled) as n_cancelled,
     countif(diverted) as n_diverted,
