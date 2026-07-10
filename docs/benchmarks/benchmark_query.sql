@@ -1,3 +1,14 @@
+-- fact_flights pruning benchmark: the representative dashboard drill-down.
+-- Run against `fact_flights` and against the unpartitioned baseline below;
+-- measure bytes from EXECUTED job statistics (dry-run bytes are an
+-- UPPER_BOUND estimate for clustered tables, not exact).
+--
+-- Baseline recreate DDL (plain CTAS: no PARTITION BY, no CLUSTER BY):
+--   CREATE OR REPLACE TABLE `de-flight-project.flight_delays_gold.fact_flights_benchmark_baseline`
+--   AS SELECT * FROM `de-flight-project.flight_delays_gold.fact_flights`;
+-- Run each variant with cache disabled, e.g.:
+--   bq query --nouse_legacy_sql --nouse_cache --job_id=<id> < benchmark_query.sql
+--   bq show --format=prettyjson -j <id>   # statistics.query.totalBytesProcessed
 SELECT
   carrier_key,
   COUNT(*) AS n_flights,
