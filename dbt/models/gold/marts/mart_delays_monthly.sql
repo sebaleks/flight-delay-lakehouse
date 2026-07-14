@@ -1,17 +1,14 @@
 {{ config(materialized='table') }}
 
--- Schedule-grain mart (year, month, day_of_week 1=Mon..7=Sun, scheduled
--- departure hour): ADDITIVE counts and sums only — no pre-divided rates, so
--- any rollup (hour only, season only, ...) computes rates as SUM/SUM and can
--- never average averages. This TABLE is the single aggregation over
--- fact_flights for the time cuts; the dashboard view dash_delays_by_time is
--- a thin label-adding skin over it.
+-- Monthly mart (one row per calendar month, true DATE month_start for time
+-- series and YoY): ADDITIVE counts and sums only — rates are computed
+-- downstream as SUM/SUM. Single aggregation over fact_flights for the trend;
+-- dash_monthly_trend is a thin skin over this TABLE.
 
 select
+    date_trunc(date_key, month) as month_start,
     extract(year from date_key) as year,
     extract(month from date_key) as month,
-    day_of_week,
-    crs_dep_hour,
     count(*) as n_flights,
     countif(arr_del15 is not null) as n_with_arr_outcome,
     countif(dep_delay_minutes is not null) as n_with_dep_outcome,
@@ -21,4 +18,4 @@ select
     sum(arr_delay_minutes) as sum_arr_delay_minutes,
     sum(dep_delay_minutes) as sum_dep_delay_minutes
 from {{ ref('fact_flights') }}
-group by year, month, day_of_week, crs_dep_hour
+group by month_start, year, month
