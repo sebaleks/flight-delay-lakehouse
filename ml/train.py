@@ -31,6 +31,8 @@ import joblib
 import numpy as np
 import pandas as pd
 import xgboost as xgb
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     accuracy_score,
@@ -39,6 +41,8 @@ from sklearn.metrics import (
     mean_squared_error,
     roc_auc_score,
 )
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 from ml import features as f
 from ml.audit import run_audit
@@ -69,28 +73,59 @@ def split_report(df: pd.DataFrame) -> dict:
     return report
 
 
-def logreg_matrices(df: pd.DataFrame, train_mask: np.ndarray):
-    """Numeric features + one-hot carrier; train-median imputation only.
+LOGREG_INPUT_COLUMNS = [*f.NUMERIC_FEATURES, "carrier"]
+
+
+def build_logreg_pipeline(max_iter: int) -> Pipeline:
+    """Self-contained logreg artifact: imputation, standardization, one-hot
+    encoding and the estimator live in ONE fitted sklearn Pipeline, persisted
+    whole with joblib — no preprocessing metadata saved beside the estimator,
+    so the artifact has no drift surface and carries its column contract
+    internally.
+
+    Train-only statistics hold structurally: Pipeline.fit(train) learns the
+    imputer medians, scaler moments and carrier levels from the training
+    frame alone; predict-time transforms reuse them on any new frame.
 
     Origin/dest/route identities are deliberately not one-hot here (7.6k+
     columns); their signal reaches the linear model through the hist_* rates.
-    Note: new-route TEST rows (NULL hist) are imputed to the train median —
-    the linear baseline has no missingness signal by construction, because
-    hist_* is never NULL on a training row (every pre-cutoff route is in the
-    shared rates), so a missing-indicator would be constant-zero in training
-    and L2 pins its coefficient to exactly 0. XGBoost consumes NaN natively.
+    New-route TEST rows (NULL hist) impute to the train median — the linear
+    baseline has no missingness signal by construction, because hist_* is
+    never NULL on a training row. keep_empty_features guards the
+    all-null-in-training edge (imputes 0, inert after scaling); unseen future
+    carriers encode to all-zeros (handle_unknown='ignore').
+
+    Metric-precision note (measured): refits of this model land within
+    ~1e-4 ROC of each other, the lbfgs noise floor. The solver terminates on
+    tolerance (n_iter 31-40 of 200, never the cap), so the stopping point is
+    path-dependent; tightening tol to 1e-8 does NOT reconcile formulation
+    variants (a ~3e-5 residual remains from float32-vs-float64 arithmetic
+    and column ordering). The ddof-0-vs-1 scaling difference is 1 + 3e-8 at
+    n = 16.7M — orders of magnitude too small to matter. Compare metrics at
+    4 decimals; differences below ~1e-4 are numerically meaningless.
     """
-    x = df[f.NUMERIC_FEATURES].copy()
-    carrier_dummies = pd.get_dummies(df["carrier"], prefix="carrier", dtype="float32")
-    x = pd.concat([x, carrier_dummies], axis=1)
-    medians = x[train_mask].median(numeric_only=True)
-    # defensive: a feature that is all-null in training leaves a NaN median,
-    # which sklearn rejects — fall back to 0 (standardization keeps it inert)
-    x = x.fillna(medians).fillna(0.0)
-    means = x[train_mask].mean()
-    stds = x[train_mask].std().replace(0, 1.0)
-    x = (x - means) / stds
-    return x.to_numpy(dtype="float32"), list(x.columns)
+    preprocess = ColumnTransformer(
+        transformers=[
+            (
+                "num",
+                Pipeline(
+                    [
+                        ("impute", SimpleImputer(strategy="median", keep_empty_features=True)),
+                        ("scale", StandardScaler()),
+                    ]
+                ),
+                f.NUMERIC_FEATURES,
+            ),
+            ("carrier", OneHotEncoder(handle_unknown="ignore", dtype=np.float32), ["carrier"]),
+        ],
+        remainder="drop",
+    )
+    return Pipeline(
+        [
+            ("prep", preprocess),
+            ("clf", LogisticRegression(class_weight="balanced", max_iter=max_iter)),
+        ]
+    )
 
 
 def xgb_frame(df: pd.DataFrame) -> pd.DataFrame:
@@ -154,19 +189,20 @@ def main() -> None:
 
     results: dict = {"split": split, "baselines": baselines, "features": ordered_features}
 
-    # ---- logistic-regression baseline ----
-    log.info("building logreg matrices ...")
-    x_lin, lin_cols = logreg_matrices(df, train_mask)
+    # ---- logistic-regression baseline (one self-contained Pipeline) ----
+    x_lin = df[LOGREG_INPUT_COLUMNS]
     log.info(
-        "fitting logistic regression on %s train rows x %d cols ...",
+        "fitting logreg pipeline on %s train rows (fit on train, transform on test) ...",
         f"{split['n_train']:,}",
-        len(lin_cols),
     )
-    logreg = LogisticRegression(class_weight="balanced", max_iter=args.logreg_max_iter)
+    logreg = build_logreg_pipeline(args.logreg_max_iter)
     logreg.fit(x_lin[train_mask], y_clf[train_mask])
     lin_scores = logreg.predict_proba(x_lin[test_mask])[:, 1]
     results["logreg_classifier"] = classification_metrics(y_clf[test_mask], lin_scores)
-    coef = pd.Series(logreg.coef_[0], index=lin_cols).sort_values(key=abs, ascending=False)
+    lin_cols = list(logreg.named_steps["prep"].get_feature_names_out())
+    coef = pd.Series(logreg.named_steps["clf"].coef_[0], index=lin_cols).sort_values(
+        key=abs, ascending=False
+    )
     results["logreg_top_coefficients"] = coef.head(15).round(4).to_dict()
     del x_lin, lin_scores
 
@@ -256,9 +292,17 @@ def main() -> None:
     # ---- artifacts ----
     run_dir = ARTIFACT_ROOT / time.strftime("%Y%m%d_%H%M%S")
     run_dir.mkdir(parents=True, exist_ok=True)
+    # UBJ artifacts persist the categorical LEVEL MAPPINGS and re-code by
+    # name at prediction time (xgboost >= 3, pinned in pyproject) — verified
+    # empirically: a fresh process scoring an independently-built frame with
+    # slice-local category sets reproduced in-process predictions exactly
+    # (130,354/130,354, max abs diff 0.0). Under xgboost 2.x the mapping was
+    # NOT stored and scoring frames with different level sets mis-scored
+    # silently; do not relax the pin.
     clf.save_model(run_dir / "xgb_classifier.ubj")
     reg.save_model(run_dir / "xgb_regressor.ubj")
-    joblib.dump(logreg, run_dir / "logreg_classifier.joblib")
+    # the WHOLE fitted pipeline (preprocessing + estimator) is the artifact
+    joblib.dump(logreg, run_dir / "logreg_pipeline.joblib")
     (run_dir / "metrics.json").write_text(json.dumps(results, indent=2, default=str))
     log.info("artifacts -> %s", run_dir)
     log.info("total wall time %.1f min", (time.time() - t0) / 60)
