@@ -46,6 +46,12 @@ models:
 # ---------------------------------------------------------------------------
 vars:
   train_test_cutoff_date: "2024-07-01"
+  # Prior strength for the ML mart's historical-rate smoothing:
+  # hist = (n*entity_rate + m*global_rate) / (n + m). Constant within an
+  # entity (no per-row adjustment of any kind), and a single-flight entity's
+  # own outcome carries only 1/(1+m) weight — the case that once motivated
+  # the (since removed) leave-one-out correction.
+  hist_smoothing_prior_strength: 50
 
 # Static reference (airport coords/tz, holiday calendar) can land here as seeds.
 seeds:

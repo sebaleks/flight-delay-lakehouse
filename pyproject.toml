@@ -45,6 +45,7 @@ ml = [
     "numpy>=1.26",
     "joblib>=1.4",
     "matplotlib>=3.9",
+    "google-cloud-bigquery-storage>=2.24",  # fast reads of the 20M-row mart
 ]
 
 [dependency-groups]

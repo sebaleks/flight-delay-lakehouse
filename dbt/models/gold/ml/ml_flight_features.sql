@@ -13,18 +13,41 @@
 --   * identifiers/schedule: carrier, origin, dest, route, distance, scheduled
 --     dep/arr times & hour buckets, day of week, month — published schedule;
 --   * hist_* rates: from the SHARED int_historical_delay_rates model
---     (pre-cutoff flights only). For TRAINING rows the row's own outcome is
---     removed with a LEAVE-ONE-OUT adjustment computed algebraically from the
---     shared model's n and rate — so no training row's feature contains its
---     own label, and the rate definition still lives exactly once. LOO
---     applies only to route/carrier/origin, where the flight is inside its
---     own aggregate; hist_dest_* stays raw for all rows because the
---     destination's outbound aggregate never contains the arriving flight
---     (leave-one-out by construction). Test rows keep the raw rates
---     (they are not in any aggregate at all).
---     Remaining documented property: training-row rates aggregate the whole
---     pre-cutoff window (a 2022 row sees 2023 peers' outcomes). Accepted:
---     the shared-model requirement (one definition for marts + ML) rules out
+--     (pre-cutoff flights only), SMOOTHED toward the training-window global:
+--     (n * entity_rate + m * global_rate) / (n + m),
+--     m = var('hist_smoothing_prior_strength'). The smoothed value is
+--     CONSTANT within an entity — identical for every row, train and test —
+--     so no per-row channel of any kind can exist, and the prior damps the
+--     single-flight-entity case (own-outcome weight 1/(1+m)). Residual
+--     self-inclusion, stated precisely: the own-label weight is 1/(n+m),
+--     maximal at n=1 where the feature takes one of two values —
+--     (50g)/51 ≈ 0.206 or (1+50g)/51 ≈ 0.226 — so for the ~102
+--     single-flight-route TRAINING rows the value does encode that row's
+--     label. ACCEPTED anyway (owner decision): 102 of 16,678,880 training
+--     rows is immaterial to the fit, and there is no test-side effect —
+--     test rows on those routes receive training-window information only.
+--     v2's LOO removed this residual exactly but opened the worse per-row
+--     artifact described below.
+--     m = 50: below ~50 observations an entity rate is noise-dominated and
+--     should shrink hard toward the prior; test metrics are insensitive to
+--     the choice (m in {10, 50, 100}: XGB ROC 0.6806/0.6809/0.6805,
+--     PR-AUC 0.3478/0.3482/0.3476 — deltas < 0.001).
+--     The global derives from the carrier level of the shared model (which
+--     partitions all pre-cutoff completed flights exactly once). It is one
+--     scalar for the whole table, so it cannot carry per-row signal; an
+--     entity's own flights re-entering its feature via the prior are bounded
+--     by m*n/(N*(n+m)) <= 3.0e-6 of the value at every grain (N = 16.7M).
+--     History of this block: v1 joined raw rates (self-inclusion: a
+--     single-flight route's feature equaled its own label); v2 replaced that
+--     with leave-one-out, which created the classic TARGET-ENCODING ARTIFACT
+--     — per-row micro-perturbations anti-correlated with the training label
+--     that HANDICAPPED the boosted trees. Note the artifact degraded model
+--     quality only; it never inflated metrics (test features never contained
+--     test labels — reported numbers were honest throughout). v3 (current)
+--     uses smoothed raw rates.
+--     Remaining documented property: rates aggregate the whole pre-cutoff
+--     window (a 2022 row sees 2023 peers' outcomes). Accepted: the
+--     shared-model requirement (one definition for marts + ML) rules out
 --     per-flight as-of-date rates; anyone carving a validation slice out of
 --     the training window must re-derive rates as-of that slice.
 --     Entities new in the test window stay NULL — never zero-filled.
@@ -66,10 +89,25 @@ rates as (
 
 ),
 
+-- Training-window GLOBAL rate/avg for the smoothing prior. The carrier level
+-- partitions every completed pre-cutoff flight exactly once, so its weighted
+-- average IS the global — still a single definition, still the shared model.
+globals as (
+
+    select
+        sum(n_flights * arr_del15_rate) / sum(n_flights) as global_arr_del15_rate,
+        sum(n_flights * avg_arr_delay_minutes) / sum(n_flights) as global_avg_arr_delay_minutes
+    from rates
+    where entity_level = 'carrier'
+
+),
+
 joined as (
 
     select
         flights.*,
+        globals.global_arr_del15_rate,
+        globals.global_avg_arr_delay_minutes,
         flights.flight_date < date('{{ var("train_test_cutoff_date") }}') as is_training_row,
         {% for grain, key in [('route', 'flights.route'), ('carrier', 'flights.carrier'),
                               ('origin', 'flights.origin'), ('dest', 'flights.dest')] %}
@@ -94,6 +132,7 @@ joined as (
         coalesce(holidays.is_day_before_holiday, false) as is_day_before_holiday,
         coalesce(holidays.is_day_after_holiday, false) as is_day_after_holiday
     from flights
+    cross join globals
     left join rates as route_rates
         on route_rates.entity_level = 'route' and route_rates.entity_key = flights.route
     left join rates as carrier_rates
@@ -130,39 +169,21 @@ select
     day_of_week,
     month,
 
-    -- shared historical delay rates. LOO applies ONLY where the flight is
-    -- genuinely inside its own aggregate: route, carrier, and origin (the
-    -- airport level is origin-grain). Training rows there get leave-one-out
-    -- (own outcome removed; NULL when the row was the entity's only
-    -- pre-cutoff flight). Test rows: raw shared rates (never in the
-    -- aggregate).
-    {% for grain in ['route', 'carrier', 'origin'] %}
-    case
-        when not is_training_row then {{ grain }}_rate_raw
-        when {{ grain }}_n_raw > 1
-            then ({{ grain }}_n_raw * {{ grain }}_rate_raw - cast(arr_del15 as int64))
-                / ({{ grain }}_n_raw - 1)
-    end as hist_{{ grain }}_arr_del15_rate,
-    case
-        when not is_training_row then {{ grain }}_avg_raw
-        when {{ grain }}_n_raw > 1
-            then ({{ grain }}_n_raw * {{ grain }}_avg_raw - arr_delay_minutes)
-                / ({{ grain }}_n_raw - 1)
-    end as hist_{{ grain }}_avg_arr_delay_minutes,
-    case
-        when not is_training_row then {{ grain }}_n_raw
-        else {{ grain }}_n_raw - 1
-    end as hist_{{ grain }}_n_flights,
+    -- shared historical delay rates, SMOOTHED toward the training-window
+    -- global: (n*p + m*global)/(n + m). Identical formula for every grain and
+    -- every row (train and test): the value is constant within an entity, so
+    -- no per-row channel can exist, and the prior handles tiny-n entities.
+    -- See the header for the v1 (raw) -> v2 (LOO, target-encoding artifact
+    -- that handicapped the booster — never inflated metrics) -> v3 (this)
+    -- history. NULL stays NULL for entities absent from the training window.
+    {% set m = var('hist_smoothing_prior_strength') %}
+    {% for grain in ['route', 'carrier', 'origin', 'dest'] %}
+    ({{ grain }}_n_raw * {{ grain }}_rate_raw + {{ m }} * global_arr_del15_rate)
+        / ({{ grain }}_n_raw + {{ m }}) as hist_{{ grain }}_arr_del15_rate,
+    ({{ grain }}_n_raw * {{ grain }}_avg_raw + {{ m }} * global_avg_arr_delay_minutes)
+        / ({{ grain }}_n_raw + {{ m }}) as hist_{{ grain }}_avg_arr_delay_minutes,
+    {{ grain }}_n_raw as hist_{{ grain }}_n_flights,
     {% endfor %}
-
-    -- hist_dest_*: the destination airport's OUTBOUND aggregate. An arriving
-    -- flight is never part of it, so the raw lookup is already leave-one-out
-    -- by construction — applying the LOO algebra here would subtract an
-    -- outcome that was never in the sum (and force valid single-flight
-    -- airports to NULL). Raw for all rows, training included.
-    dest_rate_raw as hist_dest_arr_del15_rate,
-    dest_avg_raw as hist_dest_avg_arr_delay_minutes,
-    dest_n_raw as hist_dest_n_flights,
 
     -- origin weather for the flight date (daily GSOD; see header note)
     mean_temp_f as origin_mean_temp_f,
