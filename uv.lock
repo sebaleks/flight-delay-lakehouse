@@ -761,6 +761,7 @@ ingestion = [
     { name = "tqdm" },
 ]
 ml = [
+    { name = "google-cloud-bigquery-storage" },
     { name = "joblib" },
     { name = "matplotlib" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
@@ -800,6 +801,7 @@ requires-dist = [
     { name = "dbt-bigquery", marker = "extra == 'transform'", specifier = ">=1.9,<2.0" },
     { name = "dbt-core", marker = "extra == 'transform'", specifier = ">=1.9,<2.0" },
     { name = "google-cloud-bigquery", specifier = ">=3.25" },
+    { name = "google-cloud-bigquery-storage", marker = "extra == 'ml'", specifier = ">=2.24" },
     { name = "google-cloud-storage", specifier = ">=2.18" },
     { name = "holidays", marker = "extra == 'ingestion'", specifier = ">=0.57" },
     { name = "joblib", marker = "extra == 'ml'", specifier = ">=1.4" },
@@ -1017,6 +1019,22 @@ pandas = [
     { name = "pandas" },
     { name = "pandas-gbq" },
     { name = "pyarrow" },
+]
+
+[[package]]
+name = "google-cloud-bigquery-storage"
+version = "2.39.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "google-api-core", extra = ["grpc"] },
+    { name = "google-auth" },
+    { name = "grpcio" },
+    { name = "proto-plus" },
+    { name = "protobuf" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/1b/85/c998751fb4182b84872df7eafcdd2f68e325c791102b65d416975c020020/google_cloud_bigquery_storage-2.39.0.tar.gz", hash = "sha256:d5afd90ad06cf24d9167316cca70ab5b344e880fc13031d7392aa78ee76b8bb6", size = 309852, upload-time = "2026-06-03T15:13:01.874Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/eb/f6/4157466c10181907d07786fb41df5d0a9ff339c1770b9e2a15cfe483e845/google_cloud_bigquery_storage-2.39.0-py3-none-any.whl", hash = "sha256:8c192b6263804f7bdd6f57a17e763ba7f03fa4e53d7ecafca0187e0fd6467d48", size = 305958, upload-time = "2026-06-03T15:12:15.889Z" },
 ]
 
 [[package]]

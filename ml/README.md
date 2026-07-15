@@ -1,22 +1,42 @@
 # ml/
 
-Trains two models from the **gold wide-flat feature mart** (`gold/ml`).
+Trains two models from the **gold wide-flat feature mart**
+(`flight_delays_gold.ml_flight_features`) — **the same gold layer the
+dashboard consumes; nothing is duplicated or recomputed here.** The mart owns
+the leakage boundary (CLAUDE.md §9): historical rates are training-window-only
+(smoothed toward the global, constant within an entity), weather is prior-day,
+and two standing dbt tests guard the boundary. This package re-asserts the
+contract at train time and fails hard if the mart schema drifts.
 
-- **Classification:** `ArrDel15` (delayed ≥15 min).
-- **Regression:** `ArrDelayMinutes`.
-- **Split:** time-based (train earlier dates, test later) — never random.
-- **Leakage rule (CLAUDE.md §9):** predictors use **only** information knowable
-  **before departure**. The mart already enforces this; the training code must
-  not reintroduce at/after-departure columns as features.
+Lesson recorded from the deep dive: an earlier leave-one-out variant of the
+historical rates created a target-encoding artifact — per-row perturbations
+anti-correlated with the training label — that **handicapped the boosted
+trees (it did not inflate metrics: test features never contained test
+labels, so all reported numbers were honest throughout)**. The smoothed-rate
+design removes the channel by construction.
 
-Not implemented yet — planned modules:
+- **Classification:** `label_arr_del15` (delayed ≥15 min) — logistic-regression
+  baseline (class_weight='balanced') + XGBoost (scale_pos_weight, native
+  categoricals). Headline metric: **PR-AUC** (~1-in-5 base rate makes accuracy
+  nearly meaningless — the majority-class baseline is reported alongside).
+- **Regression:** `label_arr_delay_minutes` — XGBoost vs a predict-train-mean
+  baseline. RMSE + MAE.
+- **Split:** STRICTLY the mart's `is_training_row` column (train = true,
+  evaluate = false). Never re-derived from dates, never shuffled across the
+  boundary; the trainer asserts the partition is exact and disjoint.
 
-| Module (planned)      | Responsibility                                            |
-|-----------------------|----------------------------------------------------------|
-| `data.py`             | Load feature mart from BigQuery (ADC), apply time split   |
-| `train_classifier.py` | Fit + evaluate the `ArrDel15` classifier                  |
-| `train_regressor.py`  | Fit + evaluate the `ArrDelayMinutes` regressor            |
-| `evaluate.py`         | Metrics/plots on the held-out later period                |
+| Module        | Responsibility                                              |
+|---------------|-------------------------------------------------------------|
+| `features.py` | Canonical feature registry + forbidden-column mirror         |
+| `audit.py`    | Pre-training leakage self-audit (hard gate; also standalone) |
+| `data.py`     | Load the mart from BigQuery (ADC), typed and downcast        |
+| `train.py`    | Split, fit both models, evaluate on held-out rows, artifacts |
 
-Model artifacts go to `ml/artifacts/` (git-ignored). Install deps:
-`uv sync --extra ml`.
+Model artifacts go to `ml/artifacts/` (git-ignored).
+
+Run:
+```
+uv sync --extra ml
+uv run --extra ml python -m ml.audit    # leakage audit alone
+uv run --extra ml python -m ml.train    # audit + train + evaluate
+```
