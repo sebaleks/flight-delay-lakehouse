@@ -39,11 +39,12 @@ models:
       and origin airport, computed exclusively on flights strictly before
       var('train_test_cutoff_date') (see dbt_project.yml — the single place
       the boundary lives). Both the analytics marts and the ML feature mart
-      ref() this; nothing recomputes these rates. The ML mart additionally
-      applies a leave-one-out adjustment for training rows (algebraic, from
-      n_flights and the rate — the definition still lives once). Entities
-      first seen in the test window are absent by design — consumers keep
-      the NULL. The airport level is ORIGIN-grain (flights departing).
+      ref() this; nothing recomputes these rates. The ML mart consumes them
+      smoothed toward the training-window global (prior strength
+      var('hist_smoothing_prior_strength') — the definition still lives
+      once). Entities first seen in the test window are absent by design —
+      consumers keep the NULL. The airport level is ORIGIN-grain (flights
+      departing).
     tests:
       - dbt_utils.unique_combination_of_columns:
           arguments:
