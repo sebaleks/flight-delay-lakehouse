@@ -147,6 +147,7 @@ def rate_heatmap(
     height: int = 420,
 ) -> go.Figure:
     """Heatmap from a pre-pivoted rate matrix (index=rows, columns=x)."""
+    hover = f"{x_title}: %{{x}}<br>{y_title}: %{{y}}<br>delay rate: %{{z:.1%}}<extra></extra>"
     fig = go.Figure(
         go.Heatmap(
             z=pivot.to_numpy(),
@@ -154,7 +155,7 @@ def rate_heatmap(
             y=[str(i) for i in pivot.index],
             colorscale="OrRd",
             colorbar=dict(title="Delay rate", tickformat=".0%"),
-            hovertemplate=f"{x_title}: %{{x}}<br>{y_title}: %{{y}}<br>delay rate: %{{z:.1%}}<extra></extra>",
+            hovertemplate=hover,
         )
     )
     fig.update_layout(title=title)
