@@ -164,6 +164,36 @@ def rate_heatmap(
     return _style(fig, height)
 
 
+def scatter_volume_vs_rate(
+    df: pd.DataFrame,
+    *,
+    x: str,
+    y: str,
+    hover_name: str,
+    hover_cols: list[str],
+    title: str,
+    height: int = 460,
+) -> go.Figure:
+    """Traffic (log x) vs delay rate (y). Busy-and-late routes sit top-right."""
+    fig = px.scatter(
+        df,
+        x=x,
+        y=y,
+        hover_name=hover_name,
+        hover_data=hover_cols,
+        title=title,
+        log_x=True,
+        color=y,
+        color_continuous_scale="OrRd",
+        opacity=0.6,
+    )
+    fig.update_traces(marker=dict(size=7, line=dict(width=0)))
+    fig.update_xaxes(title="Flight legs (log scale)")
+    fig.update_yaxes(tickformat=".0%", title="Delay rate")
+    fig.update_coloraxes(showscale=False)
+    return _style(fig, height)
+
+
 def grouped_rate_bar_h(
     df: pd.DataFrame,
     *,

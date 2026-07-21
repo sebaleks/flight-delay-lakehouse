@@ -43,6 +43,7 @@ orchestration = [
 dashboard = [
     "streamlit>=1.40",
     "plotly>=5.24",
+    "matplotlib>=3.9",  # pandas Styler.background_gradient colormaps
     "google-cloud-bigquery-storage>=2.24",  # fast reads of the gold views
 ]
 

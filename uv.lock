@@ -782,6 +782,7 @@ dependencies = [
 [package.optional-dependencies]
 dashboard = [
     { name = "google-cloud-bigquery-storage" },
+    { name = "matplotlib" },
     { name = "plotly" },
     { name = "streamlit" },
 ]
@@ -836,6 +837,7 @@ requires-dist = [
     { name = "google-cloud-storage", specifier = ">=2.18" },
     { name = "holidays", marker = "extra == 'ingestion'", specifier = ">=0.57" },
     { name = "joblib", marker = "extra == 'ml'", specifier = ">=1.4" },
+    { name = "matplotlib", marker = "extra == 'dashboard'", specifier = ">=3.9" },
     { name = "matplotlib", marker = "extra == 'ml'", specifier = ">=3.9" },
     { name = "numpy", marker = "extra == 'ml'", specifier = ">=1.26" },
     { name = "pandas", specifier = ">=2.2" },

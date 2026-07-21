@@ -37,11 +37,17 @@ def _timing() -> None:
     timing.render()
 
 
+def _routes() -> None:
+    from dashboard.views import routes
+
+    routes.render()
+
+
 PAGES = [
     st.Page(_overview, title="Overview", icon="🏠", default=True),
     st.Page(_reliability, title="Who is reliable?", icon="🏆"),
     st.Page(_timing, title="When do delays happen?", icon="🕒"),
-    # Phase 4: Route drill-down
+    st.Page(_routes, title="Route drill-down", icon="🛫"),
 ]
 
 
