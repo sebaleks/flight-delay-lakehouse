@@ -38,6 +38,14 @@ orchestration = [
     "dagster-gcp>=0.25,<1.0",
 ]
 
+# Dashboard: Streamlit app serving the gold dash_* views (the non-technical
+# consumer / end product). Reads BigQuery live via ADC; no data duplicated.
+dashboard = [
+    "streamlit>=1.40",
+    "plotly>=5.24",
+    "google-cloud-bigquery-storage>=2.24",  # fast reads of the gold views
+]
+
 # ML pipeline: time-based split, classification (ArrDel15) + regression (ArrDelayMinutes).
 ml = [
     "scikit-learn>=1.5",
@@ -64,7 +72,7 @@ build-backend = "hatchling.build"
 
 # The three importable Python packages in this monorepo.
 [tool.hatch.build.targets.wheel]
-packages = ["ingestion", "ml", "orchestration"]
+packages = ["ingestion", "ml", "orchestration", "dashboard"]
 
 # Dagster code location entry point (placeholder Definitions live here).
 [tool.dagster]
