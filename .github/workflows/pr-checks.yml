@@ -62,5 +62,5 @@ jobs:
 
       - name: ruff
         run: |
-          uv run ruff check ingestion ml orchestration
-          uv run ruff format --check ingestion ml orchestration
+          uv run ruff check ingestion ml orchestration dashboard
+          uv run ruff format --check ingestion ml orchestration dashboard

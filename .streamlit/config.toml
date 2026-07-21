@@ -1,0 +1,14 @@
+# Streamlit theme for the flight-delay dashboard (read when the app runs from
+# the repo root). Palette matches dashboard/ui.py severity colors.
+[theme]
+primaryColor = "#e4572e"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f2f5f8"
+textColor = "#1b2733"
+font = "sans serif"
+
+[server]
+headless = true
+
+[browser]
+gatherUsageStats = false

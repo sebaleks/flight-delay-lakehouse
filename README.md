@@ -25,9 +25,10 @@ predict delays using only pre-departure information.
                           ▼
                     Gold dataset
                      ├── star schema:  fact_flights, dim_airport, dim_carrier, dim_date
-                     └── ML feature mart:  wide, flat, one row per flight (pre-departure only)
-                          ▼
-                 ml/ (Python)  ── time-based split ──►  classifier (ArrDel15) + regressor (ArrDelayMinutes)
+                     ├── ML feature mart:  wide, flat, one row per flight (pre-departure only)
+                     └── BI marts + dash_* views  (pre-aggregated, <1 MB/query)
+                          ▼                         ▼
+   ml/ ── time split ──► classifier + regressor    dashboard/ (Streamlit) ──► non-technical consumer
 
         Dagster (orchestration/) drives:  ingest ──► dbt ──► ML   (added last)
 ```
@@ -54,7 +55,8 @@ flight-delay-lakehouse/
 │   │   └── gold/{star,ml}
 │   └── seeds/           # small static reference CSVs
 ├── orchestration/       # Dagster code location (placeholder, added last)
-└── ml/                  # Python: feature load, time-split, train/eval two models
+├── ml/                  # Python: feature load, time-split, train/eval two models
+└── dashboard/           # Streamlit app: serves the gold dash_* views (end product)
 ```
 
 ## Prerequisites
@@ -107,11 +109,15 @@ uv run dbt debug --project-dir dbt      # verifies BigQuery + ADC connectivity
 ## Status / roadmap
 
 - [x] Repo scaffold (uv, dbt, Dagster placeholder, ingestion/ml folders)
-- [ ] Ingestion: BTS → bronze CSV in GCS + external table; airports/holidays → dbt seeds
-- [ ] dbt: silver staging models
-- [ ] dbt: gold star schema (`fact_flights` + dims)
-- [ ] dbt: gold wide ML feature mart (pre-departure features only)
-- [ ] ML: time-split, classifier (`ArrDel15`), regressor (`ArrDelayMinutes`)
+- [x] Ingestion: BTS → bronze CSV in GCS + external table; airports/holidays → dbt seeds
+- [x] dbt: silver staging models
+- [x] dbt: gold star schema (`fact_flights` + dims)
+- [x] dbt: gold wide ML feature mart (pre-departure features only)
+- [x] dbt: gold BI marts + dashboard views
+- [x] ML: time-split, classifier (`ArrDel15`), regressor (`ArrDelayMinutes`)
+- [x] Performance benchmark: `fact_flights` partition/cluster pruning (see `docs/benchmarks/`)
+- [x] Dashboard: Streamlit app over the gold `dash_*` views (see `dashboard/`)
 - [ ] Dagster: wire ingest → dbt → ML (added last)
 
-The pipeline is **not implemented yet** — this is the scaffold.
+The end-to-end pipeline runs; **Dagster orchestration is the remaining piece**
+(intentionally added last, per CLAUDE.md §6).
