@@ -29,8 +29,17 @@ design removes the channel by construction.
 |---------------|-------------------------------------------------------------|
 | `features.py` | Canonical feature registry + forbidden-column mirror         |
 | `audit.py`    | Pre-training leakage self-audit (hard gate; also standalone) |
-| `data.py`     | Load the mart from BigQuery (ADC), typed and downcast        |
+| `data.py`     | Load the mart from BigQuery (ADC), typed, canonically sorted |
 | `train.py`    | Split, fit both models, evaluate on held-out rows, artifacts |
+
+**Determinism, stated precisely:** results are **deterministic given a fixed
+mart build**. The loader sorts rows on the mart's unique flight grain, so the
+frame is canonical regardless of BigQuery read order, and repeated fits on a
+fixed frame are bit-identical (measured, 5/5). Across mart *rebuilds*,
+BigQuery's distributed float aggregation order can change last bits of the
+hist_* values; histogram binning very likely absorbs that, but last-bit
+stability across rebuilds has not been verified — the guarantee is
+per-mart-build, not across rebuilds.
 
 Model artifacts go to `ml/artifacts/` (git-ignored).
 

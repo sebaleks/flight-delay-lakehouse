@@ -813,7 +813,7 @@ requires-dist = [
     { name = "requests", marker = "extra == 'ingestion'", specifier = ">=2.32" },
     { name = "scikit-learn", marker = "extra == 'ml'", specifier = ">=1.5" },
     { name = "tqdm", marker = "extra == 'ingestion'", specifier = ">=4.66" },
-    { name = "xgboost", marker = "extra == 'ml'", specifier = ">=2.1" },
+    { name = "xgboost", marker = "extra == 'ml'", specifier = ">=3.0" },
 ]
 provides-extras = ["ingestion", "transform", "orchestration", "ml"]
 
