@@ -1,5 +1,12 @@
 # Flight-Delay Dashboard — Looker Studio spec
 
+> **Note:** the dashboard is **built as a Streamlit app in [`dashboard/`](../../dashboard/)**
+> (runs in-repo, reads these same five `dash_*` views live via BigQuery). This
+> file is retained as the click-to-build recipe for a fully-managed Looker Studio
+> surface — an equivalent alternative to the Streamlit implementation. The
+> layout, grains, and calculated-field rules below apply to both.
+
+
 Five purpose-built gold views power the dashboard (project `de-flight-project`,
 dataset `flight_delays_gold`). Every view is a THIN skin over a materialized
 gold mart (label/name columns only, no aggregation) — no dashboard source
