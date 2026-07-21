@@ -25,9 +25,16 @@ def _overview() -> None:
     overview.render()
 
 
+def _reliability() -> None:
+    from dashboard.views import reliability
+
+    reliability.render()
+
+
 PAGES = [
     st.Page(_overview, title="Overview", icon="🏠", default=True),
-    # Phase 2: Who is reliable?  ·  Phase 3: When do delays happen?  ·  Phase 4: Route drill-down
+    st.Page(_reliability, title="Who is reliable?", icon="🏆"),
+    # Phase 3: When do delays happen?  ·  Phase 4: Route drill-down
 ]
 
 
