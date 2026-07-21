@@ -31,10 +31,17 @@ def _reliability() -> None:
     reliability.render()
 
 
+def _timing() -> None:
+    from dashboard.views import timing
+
+    timing.render()
+
+
 PAGES = [
     st.Page(_overview, title="Overview", icon="🏠", default=True),
     st.Page(_reliability, title="Who is reliable?", icon="🏆"),
-    # Phase 3: When do delays happen?  ·  Phase 4: Route drill-down
+    st.Page(_timing, title="When do delays happen?", icon="🕒"),
+    # Phase 4: Route drill-down
 ]
 
 
