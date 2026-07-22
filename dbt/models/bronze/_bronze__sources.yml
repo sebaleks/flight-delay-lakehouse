@@ -21,6 +21,12 @@ sources:
     description: "Immutable raw layer — external tables over GCS CSV."
     tables:
       - name: bts_on_time_performance
+        meta:
+          dagster:
+            # wires dbt lineage to the orchestration layer: models reading
+            # this source depend on the bts_external_table asset (which
+            # depends on bts_bronze)
+            asset_key: ["bts_external_table"]
         description: >
           BTS On-Time Performance 2022-2024, external table over the bronze
           CSVs (hive-partitioned year/month; created by

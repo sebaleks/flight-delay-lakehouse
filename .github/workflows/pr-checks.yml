@@ -50,15 +50,23 @@ jobs:
         with:
           enable-cache: true
 
-      # python version comes from .python-version (3.12); only the transform
-      # extra + dev group are installed to keep CI fast
-      - name: install transform extra + dev group
-        run: uv sync --extra transform --group dev
+      # python version comes from .python-version (3.12); only the transform +
+      # orchestration extras + dev group are installed to keep CI fast (the
+      # heavy ml extra is NOT needed: assets import ml/ingestion lazily inside
+      # their bodies, so Definitions load stays light and credential-free)
+      - name: install transform + orchestration extras + dev group
+        run: uv sync --extra transform --extra orchestration --group dev
 
       - name: dbt parse
         run: |
           uv run dbt deps --project-dir dbt
           uv run dbt parse --project-dir dbt --profiles-dir dbt
+
+      # loads the Definitions (asset graph, checks, schedule) and fails on a
+      # broken graph; offline — placeholder env values above satisfy dbt
+      # manifest generation, and no asset body executes at load time
+      - name: dagster definitions load-check
+        run: uv run dagster definitions validate
 
       - name: ruff
         run: |

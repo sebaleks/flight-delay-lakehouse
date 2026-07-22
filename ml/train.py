@@ -140,15 +140,10 @@ def classification_metrics(y_true, scores, threshold=0.5) -> dict:
     }
 
 
-def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
-    )
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--xgb-rounds", type=int, default=300)
-    parser.add_argument("--logreg-max-iter", type=int, default=200)
-    args = parser.parse_args()
-
+def run_training(xgb_rounds: int = 300, logreg_max_iter: int = 200) -> dict:
+    """The real training path (also wrapped by orchestration): audit gate,
+    is_training_row split, canonical-sorted load, self-contained artifacts.
+    Returns the results dict (metrics, baselines, split, artifacts_dir)."""
     t0 = time.time()
     df, bq, dataset = load_mart()
 
@@ -195,7 +190,7 @@ def main() -> None:
         "fitting logreg pipeline on %s train rows (fit on train, transform on test) ...",
         f"{split['n_train']:,}",
     )
-    logreg = build_logreg_pipeline(args.logreg_max_iter)
+    logreg = build_logreg_pipeline(logreg_max_iter)
     logreg.fit(x_lin[train_mask], y_clf[train_mask])
     lin_scores = logreg.predict_proba(x_lin[test_mask])[:, 1]
     results["logreg_classifier"] = classification_metrics(y_clf[test_mask], lin_scores)
@@ -212,7 +207,7 @@ def main() -> None:
     log.info("fitting xgboost classifier (scale_pos_weight=%.3f) ...", spw)
     x_xgb = xgb_frame(df)
     clf = xgb.XGBClassifier(
-        n_estimators=args.xgb_rounds,
+        n_estimators=xgb_rounds,
         learning_rate=0.1,
         max_depth=8,
         tree_method="hist",
@@ -257,7 +252,7 @@ def main() -> None:
     # ---- XGBoost regressor ----
     log.info("fitting xgboost regressor ...")
     reg = xgb.XGBRegressor(
-        n_estimators=args.xgb_rounds,
+        n_estimators=xgb_rounds,
         learning_rate=0.1,
         max_depth=8,
         tree_method="hist",
@@ -304,11 +299,26 @@ def main() -> None:
     # the WHOLE fitted pipeline (preprocessing + estimator) is the artifact
     joblib.dump(logreg, run_dir / "logreg_pipeline.joblib")
     (run_dir / "metrics.json").write_text(json.dumps(results, indent=2, default=str))
+    # added to the RETURNED dict only, after the file write, so metrics.json
+    # stays byte-comparable across runs on a fixed mart
+    results["artifacts_dir"] = str(run_dir)
     log.info("artifacts -> %s", run_dir)
     log.info("total wall time %.1f min", (time.time() - t0) / 60)
 
     print("\n===== RESULTS =====")
     print(json.dumps(results, indent=2, default=str))
+    return results
+
+
+def main() -> None:
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+    )
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--xgb-rounds", type=int, default=300)
+    parser.add_argument("--logreg-max-iter", type=int, default=200)
+    args = parser.parse_args()
+    run_training(args.xgb_rounds, args.logreg_max_iter)
 
 
 if __name__ == "__main__":

@@ -29,20 +29,15 @@ log = logging.getLogger("ingestion.holidays_cal")
 SEED_PATH = REPO_ROOT / "dbt" / "seeds" / "holidays.csv"
 
 
-def main() -> None:
-    setup_logging()
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--start-year", type=int, default=2022)
-    parser.add_argument("--end-year", type=int, default=2024)
-    args = parser.parse_args()
-    if args.start_year > args.end_year:
-        parser.error("--start-year is after --end-year")
-
-    us = holidays.country_holidays("US", years=range(args.start_year - 1, args.end_year + 2))
+def generate_seed(start_year: int = 2022, end_year: int = 2024) -> None:
+    """Entry point (also wrapped by orchestration): refresh dbt/seeds/holidays.csv."""
+    if start_year > end_year:
+        raise ValueError(f"start_year {start_year} is after end_year {end_year}")
+    us = holidays.country_holidays("US", years=range(start_year - 1, end_year + 2))
 
     rows = []
-    day = date(args.start_year, 1, 1)
-    end = date(args.end_year, 12, 31)
+    day = date(start_year, 1, 1)
+    end = date(end_year, 12, 31)
     while day <= end:
         rows.append(
             {
@@ -62,6 +57,17 @@ def main() -> None:
         writer.writerows(rows)
     n_holidays = sum(r["is_holiday"] for r in rows)
     log.info("wrote %d dates (%d holidays) to %s", len(rows), n_holidays, SEED_PATH)
+
+
+def main() -> None:
+    setup_logging()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--start-year", type=int, default=2022)
+    parser.add_argument("--end-year", type=int, default=2024)
+    args = parser.parse_args()
+    if args.start_year > args.end_year:
+        parser.error("--start-year is after --end-year")
+    generate_seed(args.start_year, args.end_year)
 
 
 if __name__ == "__main__":
