@@ -243,29 +243,24 @@ def ingest_month(bucket: storage.Bucket, year: int, month: int, force: bool) -> 
     return status
 
 
-def main() -> None:
-    setup_logging()
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--start", type=parse_month, default=(2022, 1), metavar="YYYY-MM")
-    parser.add_argument("--end", type=parse_month, default=(2024, 12), metavar="YYYY-MM")
-    parser.add_argument("--force", action="store_true", help="re-land existing months")
-    parser.add_argument("--workers", type=int, default=3)
-    args = parser.parse_args()
-    if args.start > args.end:
-        parser.error("--start is after --end")
-    if args.force:
-        log.warning(
-            "--force re-lands partitions IN PLACE, deviating from bronze "
-            "immutability (CLAUDE.md §3) — use only to repair a bad landing"
-        )
-
+def run_ingestion(
+    start: tuple[int, int] = (2022, 1),
+    end: tuple[int, int] = (2024, 12),
+    force: bool = False,
+    workers: int = 3,
+) -> dict[str, list[str]]:
+    """The ingestion entry point (also wrapped by orchestration): land every
+    month in [start, end], idempotently. Returns landed/skipped/failed labels;
+    callers decide how to fail."""
+    if start > end:
+        raise ValueError(f"start {start} is after end {end}")
     project = require_env("GCP_PROJECT_ID")
     bucket = storage.Client(project=project).bucket(require_env("GCS_BUCKET"))
 
-    months = list(iter_months(args.start, args.end))
+    months = list(iter_months(start, end))
     results: dict[str, list[str]] = {"landed": [], "skipped": [], "failed": []}
-    with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        futures = {pool.submit(ingest_month, bucket, y, m, args.force): (y, m) for y, m in months}
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(ingest_month, bucket, y, m, force): (y, m) for y, m in months}
         try:
             for fut in as_completed(futures):
                 year, month = futures[fut]
@@ -287,6 +282,25 @@ def main() -> None:
         len(results["failed"]),
         f" ({sorted(results['failed'])})" if results["failed"] else "",
     )
+    return results
+
+
+def main() -> None:
+    setup_logging()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--start", type=parse_month, default=(2022, 1), metavar="YYYY-MM")
+    parser.add_argument("--end", type=parse_month, default=(2024, 12), metavar="YYYY-MM")
+    parser.add_argument("--force", action="store_true", help="re-land existing months")
+    parser.add_argument("--workers", type=int, default=3)
+    args = parser.parse_args()
+    if args.start > args.end:
+        parser.error("--start is after --end")
+    if args.force:
+        log.warning(
+            "--force re-lands partitions IN PLACE, deviating from bronze "
+            "immutability (CLAUDE.md §3) — use only to repair a bad landing"
+        )
+    results = run_ingestion(args.start, args.end, args.force, args.workers)
     if results["failed"]:
         raise SystemExit(1)
 

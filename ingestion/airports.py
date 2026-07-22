@@ -164,8 +164,8 @@ def build_seed(raw_path: Path) -> list[dict[str, str]]:
     return out
 
 
-def main() -> None:
-    setup_logging()
+def generate_seed() -> None:
+    """Entry point (also wrapped by orchestration): refresh dbt/seeds/airports.csv."""
     with tempfile.TemporaryDirectory(prefix="openflights_") as tmp:
         raw_path = Path(tmp) / "airports.dat"
         log.info("downloading %s", OPENFLIGHTS_URL)
@@ -181,6 +181,11 @@ def main() -> None:
         writer.writeheader()
         writer.writerows(seed_rows)
     log.info("wrote %d airports to %s", len(seed_rows), SEED_PATH)
+
+
+def main() -> None:
+    setup_logging()
+    generate_seed()
 
 
 if __name__ == "__main__":

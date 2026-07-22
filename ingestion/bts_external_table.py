@@ -52,12 +52,9 @@ def read_landed_header(gcs: storage.Client, bucket_name: str) -> list[str]:
     return next(csv.reader([head.splitlines()[0]]))
 
 
-def main() -> None:
-    setup_logging()
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--replace", action="store_true", help="drop and recreate")
-    args = parser.parse_args()
-
+def ensure_external_table(replace: bool = False) -> None:
+    """Idempotent entry point (also wrapped by orchestration): create the
+    external table if missing; no-op when present unless replace=True."""
     project = require_env("GCP_PROJECT_ID")
     bucket_name = require_env("GCS_BUCKET")
     dataset = require_env("BQ_BRONZE_DATASET")
@@ -69,7 +66,7 @@ def main() -> None:
 
     bq = bigquery.Client(project=project)
     table_id = f"{project}.{dataset}.{TABLE_NAME}"
-    if args.replace:
+    if replace:
         bq.delete_table(table_id, not_found_ok=True)
     elif any(t.table_id == TABLE_NAME for t in bq.list_tables(dataset)):
         log.info("%s already exists, nothing to do (use --replace to recreate)", table_id)
@@ -88,6 +85,14 @@ def main() -> None:
     table.external_data_configuration = config
     bq.create_table(table)
     log.info("created external table %s (%d file columns + year/month)", table_id, len(names))
+
+
+def main() -> None:
+    setup_logging()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--replace", action="store_true", help="drop and recreate")
+    args = parser.parse_args()
+    ensure_external_table(replace=args.replace)
 
 
 if __name__ == "__main__":
