@@ -63,10 +63,12 @@ def load_mart() -> tuple[pd.DataFrame, bigquery.Client, str]:
     # row-order sensitive (measured: bit-identical fits per loaded frame,
     # ~0.001-0.002 metric spread across loads). Sorting on the mart's
     # tested-unique grain makes the frame canonical regardless of read order,
-    # so training is DETERMINISTIC GIVEN A FIXED MART BUILD. Across mart
-    # rebuilds, BigQuery's distributed float aggregation order can change
-    # last bits of hist_* values; histogram binning very likely absorbs
-    # that, but last-bit stability across rebuilds has not been verified.
+    # so training is DETERMINISTIC — verified ACROSS a full mart rebuild:
+    # a dbt rebuild of ml_flight_features followed by retraining reproduced
+    # the headline bit-identically (ROC 0.6806027430 / PR 0.3478668781).
+    # The residual caveat is now empirical-only: BigQuery's distributed
+    # float aggregation order reproduced last bits in the observed rebuild,
+    # but that stability is an observation, not a BigQuery contract.
     df = df.sort_values(
         ["flight_date", "carrier", "flight_number", "origin", "dest", "crs_dep_time"],
         ignore_index=True,

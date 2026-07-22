@@ -32,14 +32,16 @@ design removes the channel by construction.
 | `data.py`     | Load the mart from BigQuery (ADC), typed, canonically sorted |
 | `train.py`    | Split, fit both models, evaluate on held-out rows, artifacts |
 
-**Determinism, stated precisely:** results are **deterministic given a fixed
-mart build**. The loader sorts rows on the mart's unique flight grain, so the
-frame is canonical regardless of BigQuery read order, and repeated fits on a
-fixed frame are bit-identical (measured, 5/5). Across mart *rebuilds*,
-BigQuery's distributed float aggregation order can change last bits of the
-hist_* values; histogram binning very likely absorbs that, but last-bit
-stability across rebuilds has not been verified — the guarantee is
-per-mart-build, not across rebuilds.
+**Determinism, stated precisely:** the headline is **reproducible across
+mart rebuilds** — verified: a full dbt rebuild of `ml_flight_features`
+followed by retraining reproduced ROC 0.6806027430 / PR-AUC 0.3478668781
+bit-identically (and repeated fits on a fixed frame were already 5/5
+bit-identical; the loader's canonical sort removes read-order sensitivity).
+Precision of the claim: the rebuild stability is an empirical result — the
+observed rebuild reproduced the hist_* values to the last bit — not a
+BigQuery contract about distributed aggregation order; a future rebuild
+shifting last bits would move metrics within the historical ±0.002 band,
+visible immediately against the pinned headline.
 
 Model artifacts go to `ml/artifacts/` (git-ignored).
 
