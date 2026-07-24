@@ -3,7 +3,7 @@ dashboard consumes; nothing is recomputed or duplicated here.
 
 Downcasts to float32/int8/category so the full 20.2M-row mart fits
 comfortably in memory. NaNs in hist_* (entities new in the test window) and
-weather (missing prior-day observation) are preserved — XGBoost consumes them
+weather (no in-window observation at scheduled departure) are preserved — XGBoost consumes them
 natively; the logistic-regression pipeline imputes with TRAIN-set medians
 only (never test statistics).
 """

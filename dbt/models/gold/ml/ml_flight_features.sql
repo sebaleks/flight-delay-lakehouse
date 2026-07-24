@@ -53,16 +53,42 @@
 --     Entities new in the test window stay NULL — never zero-filled.
 --     hist_dest_* are the destination airport's OUTBOUND (origin-grain)
 --     rates — a congestion propensity proxy, not inbound arrival performance.
---   * origin_* weather: PRIOR-DAY daily GSOD at the origin, joined strictly
---     on obs_date = flight_date - 1, so every weather feature (including
---     has_origin_weather, the prior-day-observation-exists flag) is fully
---     observed before any departure on flight_date. Missing prior-day
---     weather stays NULL with has_origin_weather = false (missing-as-signal;
---     note all 2022-01-01 rows are false — 2021-12-31 predates the ingested
---     GSOD window). assert_ml_weather_is_prior_day pins the lag so the join
---     can never silently revert to same-day. A production system would use
---     forecast-issued-at-T data; prior-day observations are the leakage-safe
---     stand-in.
+--   * origin_* weather: the LAST hourly ISD observation at the origin AT OR
+--     BEFORE the flight's SCHEDULED departure, inside a 3-hour lookback:
+--       obs_ts_utc in (dep_ts_utc - 3h, dep_ts_utc], latest wins, where
+--       dep_ts_utc = timestamp(datetime(flight_date, crs_dep_time), origin_tz)
+--     crs_dep_time is the published schedule — the ACTUAL dep_time never
+--     enters — so every observation is pre-departure BY CONSTRUCTION,
+--     including same-day conditions. (v1..v3 of this mart used PRIOR-DAY
+--     daily GSOD because daily grain cannot bound same-day data at departure
+--     time; hourly grain can. The features now MEAN "conditions at the
+--     scheduled departure hour" — a semantic shift from the daily-summary
+--     era, deliberate and owner-approved.)
+--     TIMEZONES: ISD timestamps are UTC, BTS schedule times are LOCAL; the
+--     join converts via the airports-seed IANA tz (origin_tz, pinned by
+--     assert_flown_airports_have_timezone). An unconverted join would reach
+--     up to a UTC-offset past departure. DST gap times (a handful of 02:xx
+--     schedules a year) resolve deterministically inside TIMESTAMP(); worst
+--     case one hour, still bounded by the <= predicate.
+--     The 3-HOUR LOOKBACK is a STALENESS CEILING, not a coverage knob:
+--     mapped majors report ~2 obs/hour (METAR + specials), so the window is
+--     nowhere near binding there; it binds only at SPARSE stations (e.g.
+--     arctic BTI), where a >3h-old observation would otherwise be presented
+--     as "conditions at departure". Past the ceiling we prefer honest
+--     missingness: no observation in the window -> all weather NULL,
+--     has_origin_weather = false (missing-as-signal). The lookback may cross
+--     local midnight (a 00:30 red-eye can use a 23:5x prior-evening obs) —
+--     still strictly pre-departure.
+--     Value semantics: origin_visibility_mi is RIGHT-CENSORED at 10.0 (the
+--     source caps VIS at 16093 m — 10.0 means "10 or better");
+--     origin_gust_kn is 0.0 when the chosen observation reports no gust
+--     group (calm-hours encoding, owner decision) with origin_gust_reported
+--     carrying the distinction — never left NaN for the imputer to fill
+--     with a typical gust; origin_precip_1h_in uses ONLY 1-hour accumulation
+--     groups, never mixed windows (policy + QC nulling in silver_isd_hourly).
+--     assert_ml_weather_obs_before_departure pins obs <= scheduled departure
+--     AND the lookback window at the value level over the FULL table via the
+--     origin_weather_obs_ts_utc bookkeeping column.
 --   * holiday flags: generated calendar — known years ahead.
 -- Labels are prefixed label_ and are the ONLY post-departure columns.
 -- assert_ml_features_no_leakage pins this table's schema to the audited
@@ -73,7 +99,15 @@
 
 with flights as (
 
-    select *
+    -- dep_ts_utc: scheduled departure in UTC — LOCAL wall clock + seed tz.
+    -- The only time column here is crs_dep_time (published schedule); actual
+    -- dep_time is never referenced. Known limitation: BTS '2400' scheduled
+    -- times are stored as 00:00 of flight_date (staging convention), so a
+    -- true midnight-END-of-day departure gets weather up to ~24h STALE —
+    -- never future, never a leak; population counted in the build report.
+    select
+        *,
+        timestamp(datetime(flight_date, crs_dep_time), origin_tz) as dep_ts_utc
     from {{ ref('stg_gold__flights') }}
     where
         not cancelled
@@ -115,19 +149,19 @@ joined as (
         {{ grain }}_rates.avg_arr_delay_minutes as {{ grain }}_avg_raw,
         {{ grain }}_rates.n_flights as {{ grain }}_n_raw,
         {% endfor %}
-        weather.mean_temp_f,
-        weather.max_temp_f,
-        weather.min_temp_f,
+        weather.temp_f,
+        weather.dewpoint_f,
+        weather.wind_speed_kn,
+        weather.gust_kn,
+        weather.gust_reported,
         weather.visibility_mi,
-        weather.mean_wind_speed_kn,
-        weather.max_gust_kn,
-        weather.precip_in,
-        weather.snow_depth_in,
+        weather.precip_1h_in,
         weather.had_fog,
         weather.had_rain_drizzle,
         weather.had_snow_ice_pellets,
         weather.had_thunder,
-        weather.iata is not null as has_origin_weather,
+        weather.station_id is not null as has_origin_weather,
+        weather.obs_ts_utc as origin_weather_obs_ts_utc,
         coalesce(holidays.is_holiday, false) as is_holiday,
         coalesce(holidays.is_day_before_holiday, false) as is_day_before_holiday,
         coalesce(holidays.is_day_after_holiday, false) as is_day_after_holiday
@@ -141,14 +175,44 @@ joined as (
         on origin_rates.entity_level = 'airport' and origin_rates.entity_key = flights.origin
     left join rates as dest_rates
         on dest_rates.entity_level = 'airport' and dest_rates.entity_key = flights.dest
-    -- PRIOR-DAY join (leakage boundary): weather observed the day BEFORE the
-    -- flight — never obs_date = flight_date, which would span post-departure
-    -- hours. Pinned by assert_ml_weather_is_prior_day.
-    left join {{ ref('stg_gold__weather') }} as weather
-        on flights.origin = weather.iata
-        and weather.obs_date = date_sub(flights.flight_date, interval 1 day)
+    -- AT-OR-BEFORE hourly join (leakage boundary): the LAST ISD observation
+    -- at or before SCHEDULED departure, never after it, bounded by the
+    -- 3-hour staleness ceiling. Pinned at the value level by
+    -- assert_ml_weather_obs_before_departure. See header for tz handling.
+    -- wx_cand_date enumerates the 1-2 UTC dates the lookback window can
+    -- touch, giving the join a (station_id, obs_date) EQUI-key so BigQuery
+    -- hash-joins ~2 days of observations per flight instead of enumerating a
+    -- station's full 3-year history against every hub departure.
+    -- LEFT join (not cross): a NULL dep_ts_utc (impossible today — tz and
+    -- crs_dep_time are guarded non-null upstream — but structural) yields a
+    -- NULL array, and a cross join would silently DROP the flight row;
+    -- left join keeps it on the all-NULL-weather path instead
+    left join unnest(generate_date_array(
+        date(timestamp_sub(flights.dep_ts_utc, interval 3 hour)),
+        date(flights.dep_ts_utc)
+    )) as wx_cand_date on true
+    left join {{ ref('airport_station_map') }} as station_map
+        on flights.origin = station_map.iata
+    left join {{ ref('silver_isd_hourly') }} as weather
+        on weather.station_id = station_map.station_id
+        and weather.obs_date = wx_cand_date
+        and weather.obs_ts_utc <= flights.dep_ts_utc
+        and weather.obs_ts_utc > timestamp_sub(flights.dep_ts_utc, interval 3 hour)
     left join {{ ref('stg_holidays') }} as holidays
         on flights.flight_date = holidays.date_day
+    -- one row per flight survives: the latest in-window observation across
+    -- both candidate dates, or a bare flight row (weather.* NULL) when no
+    -- observation exists — DESC puts NULL obs_ts last, so an observation
+    -- always beats the no-match copy. Partitioning by the natural key is
+    -- safe: stg_bts_flights carries the authoritative uniqueness test on it
+    -- (this QUALIFY makes the mart's own uniqueness test pass by
+    -- construction, so the UPSTREAM test is the real duplicate guard).
+    qualify row_number() over (
+        partition by
+            flights.flight_date, flights.carrier, flights.flight_number,
+            flights.origin, flights.dest, flights.crs_dep_time
+        order by weather.obs_ts_utc desc
+    ) = 1
 
 )
 
@@ -185,20 +249,30 @@ select
     {{ grain }}_n_raw as hist_{{ grain }}_n_flights,
     {% endfor %}
 
-    -- origin weather for the flight date (daily GSOD; see header note)
-    mean_temp_f as origin_mean_temp_f,
-    max_temp_f as origin_max_temp_f,
-    min_temp_f as origin_min_temp_f,
-    visibility_mi as origin_visibility_mi,
-    mean_wind_speed_kn as origin_mean_wind_speed_kn,
-    max_gust_kn as origin_max_gust_kn,
-    precip_in as origin_precip_in,
-    snow_depth_in as origin_snow_depth_in,
+    -- origin weather AT THE SCHEDULED DEPARTURE HOUR (hourly ISD; see the
+    -- header for the join predicate, tz handling, and value semantics)
+    temp_f as origin_temp_f,
+    dewpoint_f as origin_dewpoint_f,
+    wind_speed_kn as origin_wind_speed_kn,
+    -- observation reports a gust -> value; observation without a gust group
+    -- -> 0.0 + indicator false (calm-hours encoding, owner decision); no
+    -- observation at all -> NULL like every other weather feature
+    case when has_origin_weather then coalesce(gust_kn, 0.0) end as origin_gust_kn,
+    case when has_origin_weather then gust_reported end as origin_gust_reported,
+    -- uniform right-censoring at 10.0: most stations cap VIS at 16093 m but
+    -- 0.16% of observations (extended-reporting software) exceed it — whether
+    -- a station caps is instrumentation, not weather; silver keeps raw values
+    least(visibility_mi, 10.0) as origin_visibility_mi,
+    precip_1h_in as origin_precip_1h_in,
     had_fog as origin_had_fog,
     had_rain_drizzle as origin_had_rain_drizzle,
     had_snow_ice_pellets as origin_had_snow_ice_pellets,
     had_thunder as origin_had_thunder,
     has_origin_weather,
+    -- bookkeeping, NOT a feature (EXCLUDED in ml/features.py): the timestamp
+    -- of the chosen observation, kept so the standing guard can prove
+    -- obs <= scheduled departure over the whole table at any time
+    origin_weather_obs_ts_utc,
 
     -- holiday flags (generated calendar, knowable years ahead)
     is_holiday,

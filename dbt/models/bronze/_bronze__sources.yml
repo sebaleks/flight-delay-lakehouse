@@ -8,9 +8,6 @@
 #   {{ ref('airports') }} / {{ ref('holidays') }} and never redeclare them
 #   here: a seed refresh over a same-named external table would clobber it.
 #   Decision + tradeoff in dbt/seeds/README.md.
-#
-# This is a SCAFFOLD STUB — tables/columns are placeholders. Fill in real
-# table names, columns, freshness, and tests when ingestion lands.
 
 version: 2
 
@@ -35,6 +32,25 @@ sources:
           Year_file/Month_file (they collide with the hive partition keys —
           use the `year`/`month` partition columns instead), and the BTS
           trailing-comma column is exposed as `trailing_empty` (ignore).
+
+      - name: isd_hourly
+        meta:
+          dagster:
+            # lineage hook for the orchestration layer (asset added when the
+            # ISD path is wired into Dagster; until then this is an external
+            # upstream, which `dagster definitions validate` accepts)
+            asset_key: ["isd_external_table"]
+        description: >
+          NOAA ISD Global Hourly observations 2022-2024 for the 1,165 mapped
+          stations, external table over the bronze NDJSON ACCESS LAYER
+          (bronze/isd_hourly_jsonl/, hive-partitioned by year; created by
+          ingestion/isd_external_table.py). The raw record is the station-year
+          CSVs under bronze/isd_hourly/ — heterogeneous per-station columns
+          rule out a CSV external table, so a values-verbatim NDJSON projection
+          is derived for BigQuery consumption. All fields STRING and PACKED
+          (e.g. TMP "-0194,5" = value*10 + QC code); silver decodes.
+          `_station_id` ("USAF-WBAN") is injected from file identity at
+          conversion — use it, not STATION, which can drop leading zeros.
 
   - name: noaa
     database: "bigquery-public-data"

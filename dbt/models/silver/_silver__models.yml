@@ -141,20 +141,56 @@ models:
               config:
                 severity: warn # a far-away nearest station is suspicious, not fatal
 
-  - name: silver_weather
+  - name: silver_isd_hourly
     description: >
-      GSOD observations restricted to stations referenced by
-      airport_station_map (relevance filter; full feed stays in stg_weather).
-      Mapped stations can gap on individual dates — consumers must LEFT JOIN
-      and treat missing weather as a signal, never inner join.
+      NOAA ISD hourly surface observations 2022-2024 for the 1,165 mapped
+      stations, decoded from the bronze NDJSON access layer: packed fields
+      parsed, sentinels nulled, element-level QC applied (quality codes
+      2/3/6/7 null the element — owner-approved policy), SOD/SOM embedded
+      daily summaries excluded, duplicates per (station, timestamp) resolved
+      with a deterministic METAR-first preference. Timestamps are UTC;
+      consumers joining LOCAL schedule times must convert (the ML mart does,
+      via the airports-seed tz). gust_kn stays NULL when no gust group was
+      reported (gust_reported carries the distinction); precip_1h_in uses
+      1-hour accumulation groups only — 0.0 when no precip groups exist,
+      NULL when only longer-period groups do (windows never mixed);
+      visibility_mi is RAW miles (most stations cap at 16093 m = 10.0 mi,
+      ~0.16% report beyond — the ML mart right-censors uniformly at 10.0).
     tests:
       - dbt_utils.unique_combination_of_columns:
           arguments:
-            combination_of_columns: [station_id, obs_date]
-          config:
-            severity: warn
+            combination_of_columns: [station_id, obs_ts_utc]
     columns:
       - name: station_id
+        description: USAF-WBAN, injected from file identity at conversion.
         tests: [not_null]
-      - name: obs_date
+      - name: obs_ts_utc
         tests: [not_null]
+      - name: temp_f
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: -80
+                max_value: 135
+              config:
+                severity: warn
+      - name: visibility_mi
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 100
+              config:
+                # most stations cap VIS at 16093 m = 10.0 mi; ~0.16% of obs
+                # (extended-reporting software) go beyond, observed max
+                # 99.4 mi. The ML mart right-censors uniformly at 10.0.
+                severity: warn
+      - name: precip_1h_in
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 12
+              config:
+                severity: warn
+

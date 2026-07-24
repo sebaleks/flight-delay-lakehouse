@@ -33,11 +33,17 @@ predict flight delays using **only information known before departure**.
 - **Bronze** is append-only, immutable raw CSV in GCS, **partitioned by
   `year` and `month`** using a Hive-style path layout:
   `gs://<bucket>/bronze/<source>/year=<YYYY>/month=<MM>/*.csv`.
+  Documented deviation (approved 2026-07): **ISD hourly** partitions by
+  `year=` only — station-YEAR is the source's natural file grain — and
+  carries a derived NDJSON **access layer** (`bronze/isd_hourly_jsonl/`,
+  values verbatim) because its per-station heterogeneous CSV columns cannot
+  feed a positional CSV external table; the raw CSVs remain the immutable
+  record.
   Bronze is exposed to BigQuery as **external tables** in the `bronze` dataset
   (dbt reads these as `sources`). We never rewrite bronze in place; corrections
-  land as new partitions. One documented exception: `ingestion.bts --force` is
-  a repair-only deviation that rewrites a partition in place and logs loudly —
-  never for routine updates.
+  land as new partitions. Documented exception: `ingestion.bts --force` and
+  `ingestion.isd --force` are repair-only deviations that rewrite a partition
+  in place and log loudly — never for routine updates.
 - **Silver** = cleaned, typed, conformed BigQuery tables/views (deduped, casted,
   standardized keys). Rebuildable from bronze.
 - **Gold** = analytics-ready BigQuery tables (star schema + ML mart).
@@ -87,12 +93,16 @@ Two independent consumption models live in gold:
 | Source                     | Origin                                              | Lands as                                  |
 |----------------------------|-----------------------------------------------------|-------------------------------------------|
 | BTS On-Time Performance    | Bureau of Transportation Statistics, **2022–2024**  | Bronze CSV in GCS (partitioned yr/month)  |
+| NOAA ISD Global Hourly     | NCEI, mapped stations, **2022–2024**                | Bronze station-year CSV in GCS (`year=` partitions + NDJSON access layer) |
 | NOAA GSOD weather          | BigQuery public data `bigquery-public-data.noaa_gsod` | Referenced directly as a dbt source     |
 | Airport coordinates + tz   | Static reference (e.g. OurAirports)                 | **dbt seed** (bronze dataset)              |
 | US holiday calendar        | Generated (Python `holidays` library)               | **dbt seed** (bronze dataset)              |
 
 - NOAA GSOD is read **in place** from the public dataset; it is not copied into
-  bronze. BTS lands in bronze; airports and holidays are **dbt seeds** (decided
+  bronze. Since the 2026-07 hourly rebuild its role is the station registry
+  behind `airport_station_map`; **ML origin weather comes from ISD hourly**
+  (the last observation at or before scheduled departure). BTS and ISD land
+  in bronze; airports and holidays are **dbt seeds** (decided
   2026-07: seeds, not bronze CSV — referenced via `ref()`, never declared as
   sources; tradeoff and size escape hatch in `dbt/seeds/README.md`).
 

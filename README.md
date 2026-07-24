@@ -16,7 +16,10 @@ predict delays using only pre-departure information.
   BTS 2022-2024  ────►  Bronze: raw CSV in GCS        gs://$GCS_BUCKET/bronze/<source>/year=/month=
                           │  (immutable, partitioned by year/month)
                           │  exposed to BigQuery as external tables (bronze dataset)
-  NOAA GSOD  ───────────► │  (read in place from bigquery-public-data.noaa_gsod)
+  NOAA ISD hourly ─────► │  (station-year CSVs, year= partitions + NDJSON access layer
+                          │   for the external table — ML weather at scheduled departure)
+  NOAA GSOD  ───────────► │  (read in place from bigquery-public-data.noaa_gsod;
+                          │   used for the airport→station map)
   airports+tz, holidays ► │  (dbt seeds: small static CSVs in git → bronze dataset)
                           ▼
               dbt Core (BigQuery SQL, ADC)

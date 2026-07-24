@@ -8,6 +8,10 @@
 -- Known limit (by design): this pins NAMES, not lineage — a leaky expression
 -- laundered through an approved-sounding alias still needs human review when
 -- this list is edited. Any change here is a leakage-boundary change.
+--
+-- origin_weather_obs_ts_utc is BOOKKEEPING, not a feature: it exists so
+-- assert_ml_weather_obs_before_departure can prove obs <= scheduled departure
+-- over the full table; ml/features.py EXCLUDES it from model inputs.
 
 -- depends_on: {{ ref('ml_flight_features') }}
 
@@ -19,11 +23,12 @@
     'hist_carrier_arr_del15_rate', 'hist_carrier_avg_arr_delay_minutes', 'hist_carrier_n_flights',
     'hist_origin_arr_del15_rate', 'hist_origin_avg_arr_delay_minutes', 'hist_origin_n_flights',
     'hist_dest_arr_del15_rate', 'hist_dest_avg_arr_delay_minutes', 'hist_dest_n_flights',
-    'origin_mean_temp_f', 'origin_max_temp_f', 'origin_min_temp_f',
-    'origin_visibility_mi', 'origin_mean_wind_speed_kn', 'origin_max_gust_kn',
-    'origin_precip_in', 'origin_snow_depth_in',
+    'origin_temp_f', 'origin_dewpoint_f',
+    'origin_wind_speed_kn', 'origin_gust_kn', 'origin_gust_reported',
+    'origin_visibility_mi', 'origin_precip_1h_in',
     'origin_had_fog', 'origin_had_rain_drizzle', 'origin_had_snow_ice_pellets',
     'origin_had_thunder', 'has_origin_weather',
+    'origin_weather_obs_ts_utc',
     'is_holiday', 'is_day_before_holiday', 'is_day_after_holiday',
     'is_training_row',
     'label_arr_del15', 'label_arr_delay_minutes',

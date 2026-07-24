@@ -9,11 +9,13 @@ models:
       training-window historical rates smoothed toward the global —
       (n*p + m*global)/(n+m), constant within an entity so no per-row channel
       exists, prior damping the single-flight case; NULL for entities new
-      in the test window — never zero-filled), PRIOR-DAY GSOD origin weather
-      (obs_date = flight_date - 1, strictly pre-departure; lag pinned by
-      assert_ml_weather_is_prior_day, has_origin_weather = prior-day
-      observation exists), and holiday flags. Labels carry the label_ prefix
-      and are the only
+      in the test window — never zero-filled), hourly ISD origin weather AT
+      THE SCHEDULED DEPARTURE HOUR (the last observation at or before
+      scheduled departure within a 3-hour staleness ceiling, UTC obs joined
+      to local schedule via the seed tz; pinned at the value level by
+      assert_ml_weather_obs_before_departure, has_origin_weather =
+      in-window observation exists), and holiday flags. Labels carry the
+      label_ prefix and are the only
       post-departure columns; assert_ml_features_no_leakage pins the schema
       to the audited column allowlist. Split on is_training_row (or
       flight_date) — never randomly; anyone carving a validation slice from
@@ -77,6 +79,34 @@ models:
           congestion propensity proxy, not inbound arrival performance.
           Smoothed like every grain; the arriving flight is never in this
           aggregate, so it carries no self-inclusion at any n.
+      - name: origin_visibility_mi
+        description: >
+          Visibility at the chosen observation, RIGHT-CENSORED at 10.0 (the
+          ISD source caps VIS at 16093 m — 10.0 means "10 or better").
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 10.001
+              config:
+                severity: warn
+      - name: origin_gust_kn
+        description: >
+          0.0 when the chosen observation reports no gust group (calm-hours
+          encoding, owner decision — never NaN-imputed to a typical gust);
+          origin_gust_reported carries the reported/absent distinction.
+          NULL only when no observation exists (has_origin_weather false).
+      - name: origin_precip_1h_in
+        description: >
+          1-hour accumulation ONLY (period-01 AA group): 0.0 when the
+          observation carries no precip groups, NULL when only longer-period
+          groups exist — accumulation windows are never mixed.
+      - name: origin_weather_obs_ts_utc
+        description: >
+          Bookkeeping, NOT a feature (EXCLUDED in ml/features.py): UTC
+          timestamp of the chosen observation, kept so
+          assert_ml_weather_obs_before_departure can prove obs <= scheduled
+          departure over the full table at any time.
       - name: is_training_row
         description: flight_date < var('train_test_cutoff_date'); the time-based split marker.
         tests: [not_null]

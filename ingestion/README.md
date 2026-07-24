@@ -14,10 +14,13 @@ Config/auth: all GCP identifiers from env vars (`.env`); auth via ADC
 |-------------------------|-------------------------------------------|--------------------------------------|
 | `bts.py`                | BTS On-Time Performance 2022–2024         | bronze CSV in GCS (partitioned)      |
 | `bts_external_table.py` | the landed bronze BTS CSVs                 | hive-partitioned external table (`bronze` dataset) |
+| `isd.py`                | NOAA ISD Global Hourly, mapped stations 2022–2024 | bronze station-year CSV in GCS (`year=` partitions — documented deviation: station-year is the source grain) |
+| `isd_external_table.py` | the landed bronze ISD CSVs                 | NDJSON access layer in GCS + hive-partitioned external table (`bronze` dataset) |
 | `airports.py`           | Airport coordinates + timezone reference  | `dbt/seeds/airports.csv` (dbt seed)  |
 | `holidays_cal.py`       | Generated US holiday calendar (`holidays`) | `dbt/seeds/holidays.csv` (dbt seed)  |
 
-NOAA GSOD has no module — it is read in place from `bigquery-public-data.noaa_gsod`.
+NOAA GSOD has no module — it is read in place from `bigquery-public-data.noaa_gsod`
+(it feeds the airport→station map; ML weather comes from ISD hourly).
 
 After bronze lands, an external table in the `bronze` dataset exposes the BTS
 CSVs to BigQuery for dbt. NOAA GSOD is read directly from

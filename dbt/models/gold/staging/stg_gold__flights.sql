@@ -21,6 +21,7 @@ select
     iata_code_reporting_airline,
     flight_number_reporting_airline as flight_number,
     origin,
+    origin_tz,  -- IANA tz from the airports seed: local schedule -> UTC joins
     dest,
     concat(origin, '-', dest) as route,
     crs_dep_time,
