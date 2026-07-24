@@ -154,7 +154,8 @@ models:
       reported (gust_reported carries the distinction); precip_1h_in uses
       1-hour accumulation groups only — 0.0 when no precip groups exist,
       NULL when only longer-period groups do (windows never mixed);
-      visibility_mi is right-censored at 10.0 by the source cap.
+      visibility_mi is RAW miles (most stations cap at 16093 m = 10.0 mi,
+      ~0.16% report beyond — the ML mart right-censors uniformly at 10.0).
     tests:
       - dbt_utils.unique_combination_of_columns:
           arguments:
@@ -193,20 +194,3 @@ models:
               config:
                 severity: warn
 
-  - name: silver_weather
-    description: >
-      GSOD observations restricted to stations referenced by
-      airport_station_map (relevance filter; full feed stays in stg_weather).
-      Mapped stations can gap on individual dates — consumers must LEFT JOIN
-      and treat missing weather as a signal, never inner join.
-    tests:
-      - dbt_utils.unique_combination_of_columns:
-          arguments:
-            combination_of_columns: [station_id, obs_date]
-          config:
-            severity: warn
-    columns:
-      - name: station_id
-        tests: [not_null]
-      - name: obs_date
-        tests: [not_null]

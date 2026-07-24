@@ -28,12 +28,13 @@ import csv
 import io
 import json
 import logging
+import os
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path
 
-from google.api_core.exceptions import PreconditionFailed
+from google.api_core.exceptions import NotFound, PreconditionFailed
 from google.cloud import storage
 
 from ingestion.config import require_env
@@ -41,7 +42,13 @@ from ingestion.util import download_with_retries, setup_logging
 
 log = logging.getLogger("ingestion.isd")
 
-URL_TEMPLATE = "https://www.ncei.noaa.gov/data/global-hourly/access/{year}/{usaf}{wban}.csv"
+# Base URL is overridable: NOAA/NESDIS has announced direct ISD CSV access
+# via the NCEI website is planned to move to NODD (notice: nesdis.noaa.gov,
+# "Service Location Change – Integrated Surface Data Global Hourly"). If a
+# fresh bootstrap 404s here, point ISD_BASE_URL at the NODD CSV base — the
+# {year}/{usaf}{wban}.csv suffix layout is the same.
+BASE_URL = os.environ.get("ISD_BASE_URL", "https://www.ncei.noaa.gov/data/global-hourly/access")
+URL_TEMPLATE = BASE_URL.rstrip("/") + "/{year}/{usaf}{wban}.csv"
 SOURCE_PREFIX = "bronze/isd_hourly"
 YEARS = (2022, 2023, 2024)
 
@@ -76,8 +83,15 @@ def _validate(csv_path: Path, station: str, year: int) -> int:
     if not row["DATE"].startswith(str(year)):
         raise IsdIngestError(f"{csv_path.name}: first DATE {row['DATE']!r} not in {year}")
 
+    newlines = 0
+    last_byte = b"\n"
     with open(csv_path, "rb") as fh:
-        rows = sum(chunk.count(b"\n") for chunk in iter(lambda: fh.read(1 << 22), b"")) - 1
+        for chunk in iter(lambda: fh.read(1 << 22), b""):
+            newlines += chunk.count(b"\n")
+            last_byte = chunk[-1:]
+    # count is exact even without a trailing newline (same fix as bts.py) —
+    # the NDJSON converter checks parity against this number
+    rows = newlines + (0 if last_byte == b"\n" else 1) - 1
     low, high = ROW_COUNT_BOUNDS
     if not low <= rows <= high:
         raise IsdIngestError(f"{csv_path.name}: {rows:,} rows outside [{low:,}, {high:,}]")
@@ -107,6 +121,14 @@ def ingest_station_year(bucket: storage.Bucket, station: str, year: int, force: 
         }
         try:
             if force:
+                # delete the manifest FIRST (BTS pattern): if this run dies
+                # between the CSV overwrite and the manifest write, the next
+                # non-force run re-ingests instead of skipping on a stale
+                # csv+manifest pair describing the pre-repair payload
+                try:
+                    manifest_blob.delete()
+                except NotFound:
+                    pass
                 blob.upload_from_filename(str(csv_path), content_type="text/csv", timeout=300)
             else:
                 blob.upload_from_filename(
@@ -173,6 +195,11 @@ def main() -> None:
     args = parser.parse_args()
     if not 1 <= args.workers <= 16:
         raise ValueError(f"--workers must be in [1, 16], got {args.workers}")
+    if args.force:
+        log.warning(
+            "--force re-lands station-years IN PLACE, deviating from bronze "
+            "immutability (CLAUDE.md §3) — use only to repair a bad landing"
+        )
     stations = args.stations_file.read_text().split() if args.stations_file else mapped_stations()
     log.info("ingesting %d stations x %d years", len(stations), len(YEARS))
     results = run_isd_ingestion(stations, force=args.force, workers=args.workers)

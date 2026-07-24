@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import csv
 import gzip
+import hashlib
 import io
 import json
 import logging
@@ -88,13 +89,17 @@ def convert_station_year(bucket: storage.Bucket, station: str, year: int, force:
         )
     dst = bucket.get_blob(f"{JSONL_PREFIX}/year={year}/isd_{station}.jsonl.gz")
     dst_name = f"{JSONL_PREFIX}/year={year}/isd_{station}.jsonl.gz"
-    # skip only when the existing JSONL was derived from THIS raw generation —
-    # a --force repair of the raw CSV (the one documented bronze rewrite)
-    # changes src.generation, so its stale conversion reconverts automatically
+    # skip only when the existing JSONL was derived from THIS raw generation
+    # AND this projection: a --force repair of the raw CSV changes
+    # src.generation, and a KEEP_FIELDS edit changes the projection stamp —
+    # either way the stale conversion reconverts automatically instead of
+    # silently serving pre-repair data or a mixed-projection lake
+    projection = hashlib.sha256(",".join(KEEP_FIELDS).encode()).hexdigest()[:12]
     if (
         not force
         and dst is not None
         and (dst.metadata or {}).get("src_generation") == str(src.generation)
+        and (dst.metadata or {}).get("projection") == projection
     ):
         return "skipped"
 
@@ -125,7 +130,7 @@ def convert_station_year(bucket: storage.Bucket, station: str, year: int, force:
         raise RuntimeError(f"{station}/{year}: no manifest and zero rows converted")
 
     out_blob = bucket.blob(dst_name)
-    out_blob.metadata = {"src_generation": str(src.generation)}
+    out_blob.metadata = {"src_generation": str(src.generation), "projection": projection}
     try:
         if dst is None:
             # fresh object: precondition guards the concurrent-writer race

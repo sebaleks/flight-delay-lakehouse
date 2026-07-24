@@ -183,10 +183,14 @@ joined as (
     -- touch, giving the join a (station_id, obs_date) EQUI-key so BigQuery
     -- hash-joins ~2 days of observations per flight instead of enumerating a
     -- station's full 3-year history against every hub departure.
-    cross join unnest(generate_date_array(
+    -- LEFT join (not cross): a NULL dep_ts_utc (impossible today — tz and
+    -- crs_dep_time are guarded non-null upstream — but structural) yields a
+    -- NULL array, and a cross join would silently DROP the flight row;
+    -- left join keeps it on the all-NULL-weather path instead
+    left join unnest(generate_date_array(
         date(timestamp_sub(flights.dep_ts_utc, interval 3 hour)),
         date(flights.dep_ts_utc)
-    )) as wx_cand_date
+    )) as wx_cand_date on true
     left join {{ ref('airport_station_map') }} as station_map
         on flights.origin = station_map.iata
     left join {{ ref('silver_isd_hourly') }} as weather
@@ -200,7 +204,9 @@ joined as (
     -- both candidate dates, or a bare flight row (weather.* NULL) when no
     -- observation exists — DESC puts NULL obs_ts last, so an observation
     -- always beats the no-match copy. Partitioning by the natural key is
-    -- safe: stg_bts_flights and this mart both carry uniqueness tests on it.
+    -- safe: stg_bts_flights carries the authoritative uniqueness test on it
+    -- (this QUALIFY makes the mart's own uniqueness test pass by
+    -- construction, so the UPSTREAM test is the real duplicate guard).
     qualify row_number() over (
         partition by
             flights.flight_date, flights.carrier, flights.flight_number,
