@@ -16,23 +16,6 @@ models:
       - name: carrier
         tests: [not_null]
 
-  - name: stg_gold__weather
-    description: >
-      Daily GSOD weather keyed by airport via its nearest mapped station.
-      Grain: (iata, obs_date); stations can gap on dates — LEFT JOIN and treat
-      missing as signal.
-    tests:
-      - dbt_utils.unique_combination_of_columns:
-          arguments:
-            combination_of_columns: [iata, obs_date]
-          config:
-            severity: warn
-    columns:
-      - name: iata
-        tests: [not_null]
-      - name: obs_date
-        tests: [not_null]
-
   - name: int_historical_delay_rates
     description: >
       LEAKAGE-CRITICAL shared model: historical delay rates by route, carrier,
