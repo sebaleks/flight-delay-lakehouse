@@ -7,9 +7,10 @@ Checks:
 2. The live BigQuery mart schema equals the audited column set exactly — so a
    mart change cannot silently feed the models something un-audited. (In the
    warehouse, ``assert_ml_features_no_leakage`` pins the mart schema to the
-   audited allowlist and ``assert_ml_weather_is_prior_day`` pins the weather
-   lag; the hist_* smoothed-rate semantics live in the mart SQL itself. This
-   audit re-asserts the schema contract at train time.)
+   audited allowlist and ``assert_ml_weather_obs_before_departure`` pins
+   every weather observation at or before SCHEDULED departure; the hist_*
+   smoothed-rate semantics live in the mart SQL itself. This audit re-asserts
+   the schema contract at train time.)
 3. The split column and both labels exist and features/labels/keys are
    disjoint.
 
@@ -83,8 +84,9 @@ def run_audit(bq: bigquery.Client, dataset: str) -> list[str]:
     log.info(
         "provenance (enforced by dbt standing guards on the mart): hist_* = "
         "training-window rates smoothed toward the global (constant within "
-        "an entity, train and test alike); origin weather = prior-day GSOD; "
-        "holiday flags = generated calendar"
+        "an entity, train and test alike); origin weather = last hourly ISD "
+        "observation at or before scheduled departure; holiday flags = "
+        "generated calendar"
     )
     return list(f.FEATURES)
 

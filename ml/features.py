@@ -4,8 +4,9 @@ may see. Everything here mirrors the gold ML feature mart
 the same gold layer the dashboard reads, no duplicated data or logic. The
 mart already enforces the leakage boundary (CLAUDE.md §9) — historical rates
 are training-window-only, smoothed toward the global and constant within an
-entity; weather is prior-day — and the audit in ``ml.audit`` re-asserts it
-at train time.
+entity; weather is the last hourly observation AT OR BEFORE scheduled
+departure (3-hour staleness ceiling) — and the audit in ``ml.audit``
+re-asserts it at train time.
 """
 
 from __future__ import annotations
@@ -35,15 +36,18 @@ NUMERIC_FEATURES = [
     "hist_dest_arr_del15_rate",
     "hist_dest_avg_arr_delay_minutes",
     "hist_dest_n_flights",
-    # PRIOR-DAY origin weather (obs_date = flight_date - 1)
-    "origin_mean_temp_f",
-    "origin_max_temp_f",
-    "origin_min_temp_f",
+    # origin weather AT THE SCHEDULED DEPARTURE HOUR: last hourly ISD
+    # observation at or before scheduled departure (3h staleness ceiling).
+    # visibility right-censored at 10.0 mi; gust 0.0-when-unreported with the
+    # indicator carrying the distinction; precip is the 1-hour accumulation
+    # only (NULL when only longer-period groups exist — windows never mixed)
+    "origin_temp_f",
+    "origin_dewpoint_f",
+    "origin_wind_speed_kn",
+    "origin_gust_kn",
+    "origin_gust_reported",
     "origin_visibility_mi",
-    "origin_mean_wind_speed_kn",
-    "origin_max_gust_kn",
-    "origin_precip_in",
-    "origin_snow_depth_in",
+    "origin_precip_1h_in",
     "origin_had_fog",
     "origin_had_rain_drizzle",
     "origin_had_snow_ice_pellets",
@@ -61,8 +65,18 @@ FEATURES = CATEGORICAL_FEATURES + NUMERIC_FEATURES
 
 LABELS = ["label_arr_del15", "label_arr_delay_minutes"]
 SPLIT_COL = "is_training_row"
-# identifiers / bookkeeping deliberately NOT fed to any model
-EXCLUDED = ["flight_date", "flight_number", "crs_dep_time", SPLIT_COL, *LABELS]
+# identifiers / bookkeeping deliberately NOT fed to any model.
+# origin_weather_obs_ts_utc: timestamp of the chosen weather observation,
+# carried by the mart so assert_ml_weather_obs_before_departure can prove
+# obs <= scheduled departure over the full table — never a model input.
+EXCLUDED = [
+    "flight_date",
+    "flight_number",
+    "crs_dep_time",
+    "origin_weather_obs_ts_utc",
+    SPLIT_COL,
+    *LABELS,
+]
 
 # The full audited mart schema (must equal BigQuery INFORMATION_SCHEMA —
 # the dbt guard assert_ml_features_no_leakage pins the same set).
