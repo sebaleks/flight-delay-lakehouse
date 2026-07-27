@@ -12,7 +12,8 @@ Run locally:
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException
 from google.cloud import bigquery
@@ -41,7 +42,10 @@ class FlightIn(BaseModel):
     # valid clock times only — 99:99 must 422 here, not 500 in assembly
     dep_time: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$", examples=["17:30"])
     arr_time: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$", examples=["20:45"])
-    distance: float | None = None
+    # finite-positive only: zero/negative/NaN/inf must 422, never assemble a
+    # physically invalid vector; bound comfortably above the longest US
+    # domestic leg (~5,000 mi)
+    distance: float | None = Field(default=None, gt=0, lt=20000)
 
     @field_validator("origin", "dest", "carrier")
     @classmethod
@@ -91,7 +95,9 @@ def demo_ord(target_date: date | None = None) -> list[dict]:
     prediction path is identical either way.
     """
     ctx = _ctx_or_503()
-    target = target_date or (date.today() + timedelta(days=1))
+    # "tomorrow" in ORD's own timezone — a UTC deployment queried overnight
+    # must not target the wrong calendar day
+    target = target_date or (datetime.now(ZoneInfo("America/Chicago")).date() + timedelta(days=1))
     proxy_day = target - timedelta(weeks=104)  # same weekday, in-mart
     rows = ctx.bq.query(
         f"select carrier, dest, format_time('%H:%M', crs_dep_time) as dep_time, "

@@ -95,10 +95,14 @@ def load_models(artifacts_dir: Path | None = None) -> Models:
     if artifacts_dir is None:
         if not ARTIFACT_ROOT.is_dir():
             raise FileNotFoundError(f"artifact root {ARTIFACT_ROOT} does not exist — train first")
-        # only COMPLETE runs are candidates: a crashed run's directory must
-        # not win selection and fail with a confusing load error
+        # only COMPLETE runs are candidates — all three artifacts, the same
+        # contract training writes: a run interrupted between saves must not
+        # win selection and crash startup with a confusing load error
+        required = ("xgb_classifier.ubj", "xgb_regressor.ubj", "logreg_pipeline.joblib")
         runs = sorted(
-            d for d in ARTIFACT_ROOT.iterdir() if d.is_dir() and (d / "xgb_classifier.ubj").exists()
+            d
+            for d in ARTIFACT_ROOT.iterdir()
+            if d.is_dir() and all((d / name).exists() for name in required)
         )
         if not runs:
             raise FileNotFoundError(f"no complete artifact runs under {ARTIFACT_ROOT}")
@@ -252,7 +256,15 @@ def assemble_features(ctx: ServingContext, flights: list[FlightRequest]) -> pd.D
             "origin": fl.origin,
             "dest": fl.dest,
             "route": route,
-            "distance": fl.distance if fl.distance is not None else distances.get(route, math.nan),
+            # caller override kept ONLY for finite-positive values (it is the
+            # sole distance source for routes absent from the mart); anything
+            # else falls back to the mart lookup — an invalid vector can never
+            # assemble regardless of entry path (the API additionally 422s)
+            "distance": (
+                fl.distance
+                if fl.distance is not None and math.isfinite(fl.distance) and fl.distance > 0
+                else distances.get(route, math.nan)
+            ),
             "crs_dep_hour": float(int(fl.dep_time.split(":")[0])),
             "crs_arr_hour": float(int(fl.arr_time.split(":")[0])),
             "day_of_week": float(fl.flight_date.isoweekday()),  # BTS: 1 = Monday
