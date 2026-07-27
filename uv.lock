@@ -749,6 +749,22 @@ wheels = [
 ]
 
 [[package]]
+name = "fastapi"
+version = "0.139.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "annotated-doc" },
+    { name = "pydantic" },
+    { name = "starlette" },
+    { name = "typing-extensions" },
+    { name = "typing-inspection" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/cd/95/d3f0ae10836324a2eab98a52b61210ac609f08200bf4bb0dc8132d32f78a/fastapi-0.139.2.tar.gz", hash = "sha256:333145a6891e9b5b3cfceb69baf817e8240cde4d4588ae5a10bf56ffacb6255e", size = 423428, upload-time = "2026-07-16T15:06:17.912Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5f/c7/cb03251d9dfb177246a9809a76f189d21df32dbd4a845951881d11323b7f/fastapi-0.139.2-py3-none-any.whl", hash = "sha256:b9ad015a835173d59865e2f5d8296fbc2b317bf56a2ba1a5bfbdd03de2fd4b1c", size = 130234, upload-time = "2026-07-16T15:06:19.557Z" },
+]
+
+[[package]]
 name = "fastjsonschema"
 version = "2.21.2"
 source = { registry = "https://pypi.org/simple" }
@@ -807,6 +823,12 @@ orchestration = [
     { name = "dagster-gcp" },
     { name = "dagster-webserver" },
 ]
+serve = [
+    { name = "fastapi" },
+    { name = "holidays" },
+    { name = "requests" },
+    { name = "uvicorn" },
+]
 transform = [
     { name = "dbt-bigquery" },
     { name = "dbt-core" },
@@ -831,11 +853,13 @@ requires-dist = [
     { name = "db-dtypes", specifier = ">=1.3" },
     { name = "dbt-bigquery", marker = "extra == 'transform'", specifier = ">=1.9,<2.0" },
     { name = "dbt-core", marker = "extra == 'transform'", specifier = ">=1.9,<2.0" },
+    { name = "fastapi", marker = "extra == 'serve'", specifier = ">=0.115" },
     { name = "google-cloud-bigquery", specifier = ">=3.25" },
     { name = "google-cloud-bigquery-storage", marker = "extra == 'dashboard'", specifier = ">=2.24" },
     { name = "google-cloud-bigquery-storage", marker = "extra == 'ml'", specifier = ">=2.24" },
     { name = "google-cloud-storage", specifier = ">=2.18" },
     { name = "holidays", marker = "extra == 'ingestion'", specifier = ">=0.57" },
+    { name = "holidays", marker = "extra == 'serve'", specifier = ">=0.57" },
     { name = "joblib", marker = "extra == 'ml'", specifier = ">=1.4" },
     { name = "matplotlib", marker = "extra == 'dashboard'", specifier = ">=3.9" },
     { name = "matplotlib", marker = "extra == 'ml'", specifier = ">=3.9" },
@@ -845,12 +869,14 @@ requires-dist = [
     { name = "pyarrow", specifier = ">=17.0" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "requests", marker = "extra == 'ingestion'", specifier = ">=2.32" },
+    { name = "requests", marker = "extra == 'serve'", specifier = ">=2.32" },
     { name = "scikit-learn", marker = "extra == 'ml'", specifier = ">=1.5" },
     { name = "streamlit", marker = "extra == 'dashboard'", specifier = ">=1.40" },
     { name = "tqdm", marker = "extra == 'ingestion'", specifier = ">=4.66" },
+    { name = "uvicorn", marker = "extra == 'serve'", specifier = ">=0.30" },
     { name = "xgboost", marker = "extra == 'ml'", specifier = ">=3.0" },
 ]
-provides-extras = ["ingestion", "transform", "orchestration", "dashboard", "ml"]
+provides-extras = ["ingestion", "transform", "orchestration", "dashboard", "serve", "ml"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -2894,7 +2920,7 @@ resolution-markers = [
     "python_full_version < '3.12' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" } },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/7a/97/5a3609c4f8d58b039179648e62dd220f89864f56f7357f5d4f45c29eb2cc/scipy-1.17.1.tar.gz", hash = "sha256:95d8e012d8cb8816c226aef832200b1d45109ed4464303e997c5b13122b297c0", size = 30573822, upload-time = "2026-02-23T00:26:24.851Z" }
 wheels = [
@@ -2930,7 +2956,7 @@ resolution-markers = [
     "python_full_version >= '3.12' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" } },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/a7/25/c2700dfaf6442b4effaa91af24ebce5dc9d31bb4a69706313aae70d72cd0/scipy-1.18.0.tar.gz", hash = "sha256:67b2ad2ad54c72ca6d04975a9b2df8c3638c34ddd5b28738e94fc2b57929d378", size = 30774447, upload-time = "2026-06-19T15:01:43.456Z" }
 wheels = [
@@ -3539,9 +3565,9 @@ resolution-markers = [
     "python_full_version < '3.12' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "nvidia-nccl-cu12", marker = "python_full_version < '3.12' and sys_platform == 'linux'" },
-    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" } },
+    { name = "nvidia-nccl-cu12", marker = "sys_platform == 'linux'" },
+    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" } },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/91/bb/1eb0242409d22db725d7a88088e6cfd6556829fb0736f9ff69aa9f1e9455/xgboost-3.2.0.tar.gz", hash = "sha256:99b0e9a2a64896cdaf509c5e46372d336c692406646d20f2af505003c0c5d70d", size = 1263936, upload-time = "2026-02-10T11:03:05.542Z" }
 wheels = [
@@ -3562,9 +3588,9 @@ resolution-markers = [
     "python_full_version >= '3.12' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-    { name = "nvidia-nccl-cu12", marker = "python_full_version >= '3.12' and sys_platform == 'linux'" },
-    { name = "scipy", version = "1.18.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" } },
+    { name = "nvidia-nccl-cu12", marker = "sys_platform == 'linux'" },
+    { name = "scipy", version = "1.18.0", source = { registry = "https://pypi.org/simple" } },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/fd/41/846d4de2b8fc694073fd3ac5052caf68caa1ea11cb7fa32d7ad9c049b232/xgboost-3.3.0.tar.gz", hash = "sha256:58bcb8a4cace648cdab7b94fa4f16d2c9ff26d90dd4d26907168106fa06d8746", size = 1224702, upload-time = "2026-06-17T21:26:50.846Z" }
 wheels = [

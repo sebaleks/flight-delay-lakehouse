@@ -86,3 +86,36 @@ uv run --extra ml python -m ml.audit    # leakage audit alone
 uv run --extra ml python -m ml.train    # audit + train + evaluate
 ```
 
+## Inference endpoint (FastAPI): scoring FUTURE flights with real forecasts
+
+```
+uv run --extra ml --extra serve --extra ingestion uvicorn ml.api:app --port 8000
+# POST /predict            one flight    POST /predict/batch    many
+# GET  /demo/ord-departures?target_date=YYYY-MM-DD   proxy batch demo
+```
+
+**Why this is leak-free:** the pre-departure boundary (CLAUDE.md §9) requires
+features knowable before departure. For a FUTURE flight, a weather forecast
+issued now predates departure by construction. Training uses the last
+OBSERVED hourly reading at or before the scheduled departure hour; serving
+fetches the NDFD forecast valid AT that same hour (api.weather.gov:
+official, keyless, covers the whole BTS territory).
+
+**Train/serve mismatch, stated honestly — now ONE gap:** training and
+serving reference the SAME instant, the scheduled departure hour, so the
+daily-weather era's prior-day-vs-flight-day time misalignment is gone. What
+remains is forecast-vs-observed error (training features are observations;
+serving features are forecasts of them, incl. a documented QPF-per-hour
+apportionment when NDFD issues multi-hour precip intervals). It does NOT
+change the held-out test metrics (observed data throughout); it makes the
+model usable on flights that have not happened yet. Missing forecast
+coverage (beyond the ~7-day horizon, off-grid points) reproduces the
+training NULL path exactly: weather NaN + `has_origin_weather=false`.
+
+Serving-time feature parity: hist_* rates are read from `ml_flight_features`
+itself (constant within an entity — byte-exact training values; new entities
+stay NaN), holiday flags use the same `holidays` library, and the assembled
+frame is asserted against the models' stored schemas before any prediction.
+Note on outputs: with `scale_pos_weight` ≈ 3.75 the classifier's
+probabilities are recall-weighted (systematically higher than raw delay
+frequencies) — treat them as a ranking score, not a calibrated frequency.

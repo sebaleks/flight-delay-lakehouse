@@ -48,6 +48,14 @@ dashboard = [
 ]
 
 # ML pipeline: time-based split, classification (ArrDel15) + regression (ArrDelayMinutes).
+# Inference endpoint: FastAPI serving over the trained artifacts + NWS forecasts.
+serve = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "requests>=2.32",
+    "holidays>=0.57",  # same library the training holiday calendar was generated with
+]
+
 ml = [
     "scikit-learn>=1.5",
     "xgboost>=3.0",  # >=3 required: UBJ artifacts persist categorical level mappings
