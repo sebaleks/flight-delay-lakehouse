@@ -16,7 +16,7 @@ from datetime import date, timedelta
 
 from fastapi import FastAPI, HTTPException
 from google.cloud import bigquery
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ml.serving import FlightRequest, ServingContext, build_context, predict
 
@@ -34,17 +34,25 @@ app = FastAPI(title="flight-delay inference", lifespan=lifespan)
 
 
 class FlightIn(BaseModel):
-    origin: str = Field(examples=["ORD"])
-    dest: str = Field(examples=["ATL"])
-    carrier: str = Field(examples=["AA"])
+    origin: str = Field(pattern=r"^[A-Za-z0-9]{3}$", examples=["ORD"])
+    dest: str = Field(pattern=r"^[A-Za-z0-9]{3}$", examples=["ATL"])
+    carrier: str = Field(pattern=r"^[A-Za-z0-9]{2,3}$", examples=["AA"])
     flight_date: date
-    dep_time: str = Field(pattern=r"^\d{2}:\d{2}$", examples=["17:30"])
-    arr_time: str = Field(pattern=r"^\d{2}:\d{2}$", examples=["20:45"])
+    # valid clock times only — 99:99 must 422 here, not 500 in assembly
+    dep_time: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$", examples=["17:30"])
+    arr_time: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$", examples=["20:45"])
     distance: float | None = None
+
+    @field_validator("origin", "dest", "carrier")
+    @classmethod
+    def _uppercase(cls, v: str) -> str:
+        # BTS codes are uppercase; lowercase input would silently miss the
+        # airport/hist lookups and score as unseen categories
+        return v.upper()
 
 
 class BatchIn(BaseModel):
-    flights: list[FlightIn]
+    flights: list[FlightIn] = Field(min_length=1)
 
 
 def _ctx_or_503() -> ServingContext:

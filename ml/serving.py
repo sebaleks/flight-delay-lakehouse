@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import logging
 import math
+import time
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -47,7 +48,7 @@ from google.cloud import bigquery
 
 from ingestion.config import require_env
 from ml import features as f
-from ml.forecast import WEATHER_FEATURE_DEFAULTS, fetch_hourly_forecast
+from ml.forecast import NULL_PATH, features_at_hour, fetch_grid
 from ml.train import ARTIFACT_ROOT, LOGREG_INPUT_COLUMNS
 
 log = logging.getLogger("ml.serving")
@@ -92,9 +93,15 @@ def load_models(artifacts_dir: Path | None = None) -> Models:
     """Load the self-contained artifacts (no retraining, no side metadata) and
     assert their stored feature schemas match the canonical registry."""
     if artifacts_dir is None:
-        runs = sorted(d for d in ARTIFACT_ROOT.iterdir() if d.is_dir())
+        if not ARTIFACT_ROOT.is_dir():
+            raise FileNotFoundError(f"artifact root {ARTIFACT_ROOT} does not exist — train first")
+        # only COMPLETE runs are candidates: a crashed run's directory must
+        # not win selection and fail with a confusing load error
+        runs = sorted(
+            d for d in ARTIFACT_ROOT.iterdir() if d.is_dir() and (d / "xgb_classifier.ubj").exists()
+        )
         if not runs:
-            raise FileNotFoundError(f"no artifact runs under {ARTIFACT_ROOT}")
+            raise FileNotFoundError(f"no complete artifact runs under {ARTIFACT_ROOT}")
         artifacts_dir = runs[-1]
     clf = xgb.XGBClassifier()
     clf.load_model(artifacts_dir / "xgb_classifier.ubj")
@@ -176,22 +183,56 @@ def _holiday_flags(d: date) -> dict[str, float]:
     }
 
 
+# NDFD grids refresh roughly hourly: cache each airport's fetched GRID for 30
+# minutes (bounded by the airport count — never unbounded growth), and pin a
+# FAILED fetch for only 5 minutes so a transient error or beyond-horizon
+# request can never permanently lock a flight onto the NULL path. Per-hour
+# feature extraction is pure and cheap, so it is not cached at all.
+GRID_TTL_S = 1800
+GRID_FAIL_TTL_S = 300
+
+
+def _grid_for(ctx: ServingContext, origin: str) -> dict | None:
+    now = time.monotonic()
+    hit = ctx.forecast_cache.get(origin)
+    if hit is not None:
+        fetched_at, props = hit
+        if now - fetched_at < (GRID_TTL_S if props is not None else GRID_FAIL_TTL_S):
+            return props
+    a = ctx.airports.loc[origin]
+    props = fetch_grid(float(a["latitude"]), float(a["longitude"]))
+    ctx.forecast_cache[origin] = (now, props)
+    return props
+
+
 def _origin_weather(ctx: ServingContext, origin: str, d: date, dep_time: str) -> dict[str, float]:
     """Forecast at the SCHEDULED departure hour — the training time reference.
     Local wall clock -> UTC via the airport's IANA tz, exactly as the mart's
-    join does with observations. Cache key includes the hour."""
+    join does with observations."""
+    if origin not in ctx.airports.index:
+        return dict(NULL_PATH)  # unknown airport: the training NULL path
+    a = ctx.airports.loc[origin]
+    tz = a["tz"]
+    if not isinstance(tz, str) or not tz:
+        # a dim_airport row without a timezone cannot place the departure
+        # hour — NULL weather path, never a 500
+        log.warning("%s has no timezone in dim_airport; NULL weather path", origin)
+        return dict(NULL_PATH)
     hour = int(dep_time.split(":")[0])
-    key = (origin, d, hour)
-    if key not in ctx.forecast_cache:
-        if origin in ctx.airports.index:
-            a = ctx.airports.loc[origin]
-            dep_local = datetime(d.year, d.month, d.day, hour, tzinfo=ZoneInfo(str(a["tz"])))
-            ctx.forecast_cache[key] = fetch_hourly_forecast(
-                float(a["latitude"]), float(a["longitude"]), dep_local.astimezone(UTC)
-            )
-        else:  # unknown airport: the training NULL path
-            ctx.forecast_cache[key] = {**WEATHER_FEATURE_DEFAULTS, "has_origin_weather": 0.0}
-    return ctx.forecast_cache[key]
+    dep_local = datetime(d.year, d.month, d.day, hour, tzinfo=ZoneInfo(tz))
+    dep_utc = dep_local.astimezone(UTC)
+    if dep_utc <= datetime.now(UTC):
+        # scoring an already-departed flight is a legitimate debugging use,
+        # but the CURRENT grid may postdate departure — the output is not
+        # "pre-departure knowable" and must not be presented as such
+        log.warning(
+            "%s %s %s already departed: forecast grid may postdate departure; "
+            "not a pre-departure prediction",
+            origin,
+            d,
+            dep_time,
+        )
+    return features_at_hour(_grid_for(ctx, origin), dep_utc)
 
 
 def assemble_features(ctx: ServingContext, flights: list[FlightRequest]) -> pd.DataFrame:
@@ -233,6 +274,13 @@ def assemble_features(ctx: ServingContext, flights: list[FlightRequest]) -> pd.D
         row.update(_holiday_flags(fl.flight_date))
         rows.append(row)
 
+    # gate BEFORE frame construction: pd.DataFrame(columns=...) would silently
+    # create an all-NaN column for any feature the row dicts failed to
+    # populate — a registry addition unmatched in serving must raise, never
+    # score as a serving-only all-missing pattern
+    unpopulated = [c for c in f.FEATURES if c not in rows[0]]
+    if unpopulated:
+        raise SchemaMismatchError(f"assembly did not populate features: {unpopulated}")
     x = pd.DataFrame(rows, columns=list(f.FEATURES))
     for c in f.CATEGORICAL_FEATURES:
         x[c] = x[c].astype("category")
@@ -249,6 +297,8 @@ def assemble_features(ctx: ServingContext, flights: list[FlightRequest]) -> pd.D
 
 
 def predict(ctx: ServingContext, flights: list[FlightRequest]) -> list[dict]:
+    if not flights:
+        return []
     x = assemble_features(ctx, flights)
     p_xgb = ctx.models.clf.predict_proba(x)[:, 1]
     minutes = ctx.models.reg.predict(x)
@@ -262,10 +312,13 @@ def predict(ctx: ServingContext, flights: list[FlightRequest]) -> list[dict]:
                 "expected_delay_minutes": round(float(minutes[i]), 1),
                 "logreg_baseline_probability": round(float(p_logreg[i]), 4),
                 "has_origin_weather": bool(x["has_origin_weather"].iloc[i] == 1.0),
+                # pd.isna, not isinstance(float): numeric columns hold
+                # np.float32, which is NOT a Python float — the old check
+                # never fired and NaN leaked into the JSON on the NULL path
                 "features": {
                     k: (
                         None
-                        if isinstance(v := x[k].iloc[i], float) and math.isnan(v)
+                        if pd.isna(v := x[k].iloc[i])
                         else (str(v) if k in f.CATEGORICAL_FEATURES else float(v))
                     )
                     for k in f.FEATURES

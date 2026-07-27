@@ -66,6 +66,22 @@ HEADERS = {
 }
 TIMEOUT = (10, 30)
 
+
+def _session() -> requests.Session:
+    """One retry-wrapped session: a single transient 5xx must not silently
+    degrade a flight to the no-weather path."""
+    from requests.adapters import HTTPAdapter
+    from urllib3.util.retry import Retry
+
+    s = requests.Session()
+    retry = Retry(total=2, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
+    s.mount("https://", HTTPAdapter(max_retries=retry))
+    s.headers.update(HEADERS)
+    return s
+
+
+SESSION = _session()
+
 WEATHER_FEATURE_DEFAULTS: dict[str, float] = {
     "origin_temp_f": math.nan,
     "origin_dewpoint_f": math.nan,
@@ -80,21 +96,52 @@ WEATHER_FEATURE_DEFAULTS: dict[str, float] = {
     "origin_had_thunder": math.nan,
 }
 
-_DURATION = re.compile(r"P(?:(\d+)D)?(?:T(?:(\d+)H)?)?")
+_DURATION = re.compile(r"P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?)?")
+
+# NDFD layer units this client's conversions assume. A layer served in any
+# other unit is treated as MISSING (fail toward the NULL path) rather than
+# converted wrongly.
+EXPECTED_UOM = {
+    "temperature": "wmoUnit:degC",
+    "dewpoint": "wmoUnit:degC",
+    "windSpeed": "wmoUnit:km_h-1",
+    "windGust": "wmoUnit:km_h-1",
+    "visibility": "wmoUnit:m",
+    "quantitativePrecipitation": "wmoUnit:mm",
+}
 
 
 def _parse_valid_time(valid: str) -> tuple[datetime, timedelta]:
-    """Parse NDFD 'start/ISO-duration' strings like 2026-07-30T18:00:00+00:00/PT6H."""
+    """Parse NDFD 'start/ISO-duration' strings like 2026-07-30T18:00:00+00:00/PT6H.
+    Days/hours/minutes are handled; an unrecognized or zero duration yields
+    timedelta(0), so the interval can never contain an instant — the value is
+    skipped (fail closed toward missing), never mis-attributed to the hour."""
     start_s, dur_s = valid.split("/")
     start = datetime.fromisoformat(start_s)
     m = _DURATION.fullmatch(dur_s)
-    days = int(m.group(1) or 0) if m else 0
-    hours = int(m.group(2) or 0) if m else 0
-    return start, timedelta(days=days, hours=max(1, hours) if not days else hours)
+    if not m:
+        return start, timedelta(0)
+    days = int(m.group(1) or 0)
+    hours = int(m.group(2) or 0)
+    minutes = int(m.group(3) or 0)
+    return start, timedelta(days=days, hours=hours, minutes=minutes)
 
 
-def _interval_at(layer: dict, t: datetime) -> tuple[float, timedelta] | None:
-    """The layer value whose validity interval contains t, with its duration."""
+def _interval_at(props: dict, name: str, t: datetime) -> tuple[float, timedelta] | None:
+    """The named layer's value whose validity interval contains t, with its
+    duration. When the layer's uom does not match the unit this client
+    converts from, the layer is treated as MISSING — never converted with
+    the wrong factor."""
+    layer = props.get(name) or {}
+    expected = EXPECTED_UOM.get(name)
+    if expected is not None and layer.get("uom") not in (None, expected):
+        log.warning(
+            "%s uom %r != expected %r — treating layer as missing",
+            name,
+            layer.get("uom"),
+            expected,
+        )
+        return None
     for v in layer.get("values", []):
         if v.get("value") is None:
             continue
@@ -104,8 +151,8 @@ def _interval_at(layer: dict, t: datetime) -> tuple[float, timedelta] | None:
     return None
 
 
-def _value_at(layer: dict, t: datetime) -> float | None:
-    hit = _interval_at(layer, t)
+def _value_at(props: dict, name: str, t: datetime) -> float | None:
+    hit = _interval_at(props, name, t)
     return hit[0] if hit else None
 
 
@@ -121,49 +168,59 @@ def _phenomena_at(layer: dict, t: datetime) -> set[str]:
     return seen
 
 
-def fetch_hourly_forecast(lat: float, lon: float, dep_utc: datetime) -> dict:
-    """Forecast valid AT one UTC instant (the scheduled departure hour),
-    mapped to the point-in-time training feature names. Returns the feature
-    dict plus has_origin_weather; any failure or unresolved hour -> the
-    training NULL path."""
-    features = dict(WEATHER_FEATURE_DEFAULTS)
+NULL_PATH = {**WEATHER_FEATURE_DEFAULTS, "has_origin_weather": 0.0}
+
+
+def fetch_grid(lat: float, lon: float) -> dict | None:
+    """The full gridded-forecast properties for one point (covers every hour
+    in the horizon — fetch once per airport, extract many hours). None on any
+    failure; retried once on transient 5xx by the session."""
     try:
-        point = requests.get(
-            f"{API_ROOT}/points/{lat:.4f},{lon:.4f}", headers=HEADERS, timeout=TIMEOUT
-        )
+        point = SESSION.get(f"{API_ROOT}/points/{lat:.4f},{lon:.4f}", timeout=TIMEOUT)
         point.raise_for_status()
         grid_url = point.json()["properties"]["forecastGridData"]
-        grid = requests.get(grid_url, headers=HEADERS, timeout=TIMEOUT)
+        grid = SESSION.get(grid_url, timeout=TIMEOUT)
         grid.raise_for_status()
-        props = grid.json()["properties"]
+        return grid.json()["properties"]
+    except Exception as exc:
+        log.warning("grid fetch failed for (%.3f, %.3f): %s", lat, lon, exc)
+        return None
 
-        temp_c = _value_at(props.get("temperature", {}), dep_utc)
+
+def features_at_hour(props: dict | None, dep_utc: datetime) -> dict:
+    """Pure extraction: the feature dict for one UTC instant from a fetched
+    grid. Any failure or unresolved hour -> a FRESH all-NaN NULL path (never
+    a partially populated dict — an exception midway must not leak the
+    values assigned before it)."""
+    if props is None:
+        return dict(NULL_PATH)
+    features = dict(WEATHER_FEATURE_DEFAULTS)
+    try:
+        temp_c = _value_at(props, "temperature", dep_utc)
         if temp_c is None:
-            log.info("no forecast at %s for (%.3f, %.3f) (beyond horizon?)", dep_utc, lat, lon)
-            return {**features, "has_origin_weather": 0.0}
+            log.info("no forecast value at %s (beyond horizon?)", dep_utc)
+            return dict(NULL_PATH)
 
         features["origin_temp_f"] = temp_c * 9 / 5 + 32
-        dew_c = _value_at(props.get("dewpoint", {}), dep_utc)
+        dew_c = _value_at(props, "dewpoint", dep_utc)
         if dew_c is not None:
             features["origin_dewpoint_f"] = dew_c * 9 / 5 + 32
-        wind = _value_at(props.get("windSpeed", {}), dep_utc)
+        wind = _value_at(props, "windSpeed", dep_utc)
         if wind is not None:
             features["origin_wind_speed_kn"] = wind / 1.852  # km/h -> kn
-        gust = _value_at(props.get("windGust", {}), dep_utc)
+        gust = _value_at(props, "windGust", dep_utc)
         # absent-as-calm + indicator: the training encoding for an observation
         # that reports no gust group
         features["origin_gust_kn"] = gust / 1.852 if gust is not None else 0.0
         features["origin_gust_reported"] = 1.0 if gust is not None else 0.0
-        vis = _value_at(props.get("visibility", {}), dep_utc)
+        vis = _value_at(props, "visibility", dep_utc)
         # NDFD publishes visibility primarily during RESTRICTION; absent at
         # the hour with the grid resolved means unrestricted -> 10.0, the
         # mart's right-censored clear-day value (training rows with an
         # observation almost never carry NaN visibility, so NaN here would
         # be a serving-only pattern)
-        features["origin_visibility_mi"] = (
-            min(vis / 1609.344, 10.0) if vis is not None else 10.0
-        )
-        qpf = _interval_at(props.get("quantitativePrecipitation", {}), dep_utc)
+        features["origin_visibility_mi"] = min(vis / 1609.344, 10.0) if vis is not None else 10.0
+        qpf = _interval_at(props, "quantitativePrecipitation", dep_utc)
         if qpf is None:
             features["origin_precip_1h_in"] = 0.0
         else:
@@ -173,18 +230,26 @@ def fetch_hourly_forecast(lat: float, lon: float, dep_utc: datetime) -> dict:
 
         phenomena = _phenomena_at(props.get("weather", {}), dep_utc)
         features["origin_had_fog"] = float(any("fog" in p for p in phenomena))
+        # freezing LIQUID precip counts as rain — the FRSHTT convention the
+        # training decoder applies (silver_isd_hourly: MW 56-57/66-67 and
+        # AW 47-48 land in had_rain_drizzle, never the snow flag)
         features["origin_had_rain_drizzle"] = float(
-            any(p in ("rain", "drizzle", "rain_showers") for p in phenomena)
-        )
-        features["origin_had_snow_ice_pellets"] = float(
             any(
-                p in ("snow", "sleet", "ice_pellets", "snow_showers", "freezing_rain")
+                p in ("rain", "drizzle", "rain_showers", "freezing_rain", "freezing_drizzle")
                 for p in phenomena
             )
+        )
+        features["origin_had_snow_ice_pellets"] = float(
+            any(p in ("snow", "sleet", "ice_pellets", "snow_showers") for p in phenomena)
         )
         features["origin_had_thunder"] = float(any("thunder" in p for p in phenomena))
         features["has_origin_weather"] = 1.0
         return features
-    except Exception as exc:  # any failure -> the training NULL path
-        log.warning("forecast unavailable for (%.3f, %.3f) %s: %s", lat, lon, dep_utc, exc)
-        return {**features, "has_origin_weather": 0.0}
+    except Exception as exc:  # any failure -> a FRESH all-NaN NULL path
+        log.warning("forecast extraction failed at %s: %s", dep_utc, exc)
+        return dict(NULL_PATH)
+
+
+def fetch_hourly_forecast(lat: float, lon: float, dep_utc: datetime) -> dict:
+    """One-shot convenience: fetch the grid and extract one hour."""
+    return features_at_hour(fetch_grid(lat, lon), dep_utc)
