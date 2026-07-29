@@ -22,11 +22,15 @@ models:
       from SCHEDULE columns only (crs times, elapsed, distance, tail link) —
       the prior leg's ACTUAL outcomes are never selected. Chain links by UTC
       timestamps across midnight (red-eyes explicit); day position counts
-      within the BTS service date. Band keys (turnaround_band,
-      rotation_position_key) are never NULL — first-leg, overnight-break and
-      unknown-tail flights carry their own keys with their own
-      training-window history. One row per scheduled leg; the ML mart and
-      int_historical_delay_rates both ref() this — the definition lives once.
+      within the BTS service date. THE TAIL-SWAP RESTRICTION (adopted 2026-07
+      after the gating experiment — see the model header): rotation features
+      exist ONLY for schedule-consistent links; swap-shaped linkages
+      (negative gap, station-continuity violation, overlapped prior, unknown
+      tail — 4.12% of legs) carry NULL for every rotation column INCLUDING
+      the band keys, and are excluded from the rates. A NULL band means
+      "linkage not schedule-explained", never a silent default. One row per
+      scheduled leg; the ML mart and int_historical_delay_rates both ref()
+      this — the definition lives once.
       Value-level pin: assert_ml_rotation_schedule_only.
     tests:
       - dbt_utils.unique_combination_of_columns:
@@ -41,16 +45,14 @@ models:
     columns:
       - name: turnaround_band
         tests:
-          - not_null
           - accepted_values:
               arguments:
-                values: ['no_tail', 'no_inbound', 'lt_35', '35_60', '60_120', 'ge_120']
+                values: ['no_inbound', 'lt_35', '35_60', '60_120', 'ge_120']
       - name: rotation_position_key
         tests:
-          - not_null
           - accepted_values:
               arguments:
-                values: ['none', '1', '2', '3', '4', '5', '6']
+                values: ['1', '2', '3', '4', '5', '6']
       - name: sched_turnaround_min
         tests:
           - dbt_utils.accepted_range:

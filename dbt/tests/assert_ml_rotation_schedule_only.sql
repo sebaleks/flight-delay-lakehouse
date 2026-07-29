@@ -15,11 +15,14 @@
 --     within the RECOMPUTED band/position (pins the rates join to the clean
 --     schedule-derived key: a band derived from actuals in the int model
 --     would split a recomputed band across multiple hist values);
---   * flag mirror + no-inbound attribute nulls + position-without-tail.
+--   * class-aware flag semantics (a TRUE / b FALSE / c NULL) + full
+--     nulling of swap-shaped rows + clean-first-leg attribute rules.
 -- The chain is recomputed over ALL scheduled legs (including later-cancelled
 -- ones — unknowable at prediction time), exactly the int-model convention,
--- with the same duty window (0-14h) and station-continuity rule
--- (prior dest = this origin).
+-- with the same duty window (0-14h), station-continuity rule (prior dest =
+-- this origin), and the TAIL-SWAP RESTRICTION classes: a = consistent
+-- inbound, b = clean first leg, c = swap-shaped (every rotation feature
+-- and hist value must be NULL — the leak the restriction removes).
 
 with legs as (
 
@@ -80,10 +83,18 @@ expected as (
         exp_position,
         exp_legs_today,
         exp_density,
-        prior_arr_ts is not null
-            and timestamp_diff(dep_ts, prior_arr_ts, minute) between 0 and 840
-            and prior_dest = origin
-            and not prior_overlapped as exp_has_inbound,
+        -- schedule-consistency class (the tail-swap restriction):
+        -- a = consistent inbound, b = clean first leg, c = swap-shaped
+        case
+            -- mirror of the int model: prior_dest NULL <=> no prior at all;
+            -- a prior with unknown arrival falls through to 'c'
+            when prior_dest is null then 'b'
+            when timestamp_diff(dep_ts, prior_arr_ts, minute) between 0 and 840
+                and prior_dest = origin and not prior_overlapped then 'a'
+            when timestamp_diff(dep_ts, prior_arr_ts, minute) > 840
+                and prior_dest = origin and not prior_overlapped then 'b'
+            else 'c'
+        end as exp_class,
         case
             when prior_arr_ts is not null
                 and timestamp_diff(dep_ts, prior_arr_ts, minute) between 0 and 840
@@ -164,55 +175,73 @@ union all
 select flight_date, origin, carrier, 'position_or_day_mismatch' as violation
 from joined
 where
-    rotation_position is distinct from exp_position
-    or legs_today is distinct from exp_legs_today
-    or origin_dep_density_hour is distinct from exp_density
+    origin_dep_density_hour is distinct from exp_density
+    or (
+        exp_class != 'c'
+        and (
+            rotation_position is distinct from exp_position
+            or legs_today is distinct from exp_legs_today
+        )
+    )
 
 union all
 
 select flight_date, origin, carrier, 'flag_mismatch' as violation
 from joined
--- IS DISTINCT FROM, not != : a NULL flag (rotation-join miss) must FAIL
--- here, never null out of the comparison silently
-where has_inbound_leg is distinct from exp_has_inbound
+-- class-aware flag semantics under the restriction:
+-- a -> TRUE, b -> FALSE, c -> NULL (swap-shaped: unknowable). IS DISTINCT
+-- FROM keeps NULLs comparable — a wrong NULL/false swap fails here.
+where has_inbound_leg is distinct from
+    case exp_class when 'a' then true when 'b' then false else cast(null as bool) end
+
+union all
+
+-- c rows must be FULLY nulled — a band or position surviving on a
+-- swap-shaped link is exactly the leak the restriction removes
+select flight_date, origin, carrier, 'swap_shaped_not_nulled' as violation
+from joined
+where exp_class = 'c' and (
+    rotation_position is not null or legs_today is not null
+    or sched_turnaround_min is not null or sched_turnaround_slack_min is not null
+    or is_tight_turnaround is not null
+    or inbound_distance is not null or inbound_crs_elapsed_min is not null
+    -- ALL six hist columns, not just the rates: a partial null-out that
+    -- leaves avg/n populated would still feed the model
+    or hist_turnaround_band_arr_del15_rate is not null
+    or hist_turnaround_band_avg_arr_delay_minutes is not null
+    or hist_turnaround_band_n_flights is not null
+    or hist_rotation_position_arr_del15_rate is not null
+    or hist_rotation_position_avg_arr_delay_minutes is not null
+    or hist_rotation_position_n_flights is not null
+)
 
 union all
 
 -- the int model emits a row for EVERY scheduled leg (tail-known or not), so
--- a NULL flag in the mart means the rotation join itself missed — fail loud
+-- a NULL density in the mart means the rotation join itself missed — fail
+-- loud (density is the one column the int model never nulls)
 select flight_date, origin, carrier, 'rotation_join_miss' as violation
 from mart
-where has_inbound_leg is null
+where origin_dep_density_hour is null
 
 union all
 
 select flight_date, origin, carrier, 'inbound_attrs_without_inbound' as violation
-from mart
+from joined
 where
-    not has_inbound_leg
+    exp_class = 'b'
     and (
         sched_turnaround_min is not null
         or sched_turnaround_slack_min is not null
         or inbound_distance is not null
         or inbound_crs_elapsed_min is not null
-        -- no-inbound rows must be exactly FALSE (the coalesce in the int
-        -- model), never NULL — a silent FALSE->NULL distribution change
+        -- clean first legs must be exactly FALSE (the int model's
+        -- coalesce), never NULL — a silent FALSE->NULL distribution change
         -- in a model feature must fail here
         or is_tight_turnaround is distinct from false
+        or rotation_position is null
+        or legs_today is null
     )
-
-union all
-
-select mart.flight_date, mart.origin, mart.carrier, 'position_without_tail' as violation
-from mart
-left join expected
-    on expected.flight_date = mart.flight_date
-    and expected.carrier = mart.carrier
-    and expected.flight_number is not distinct from mart.flight_number
-    and expected.origin = mart.origin
-    and expected.dest = mart.dest
-    and expected.crs_dep_time = mart.crs_dep_time
-where expected.flight_date is null and mart.rotation_position is not null
 
 union all
 
@@ -222,7 +251,7 @@ select date '1900-01-01', band, 'ALL', 'hist_not_constant_within_band' as violat
 from (
     select
         case
-            when not exp_has_inbound then 'no_inbound'
+            when exp_class = 'b' then 'no_inbound'
             when exp_turnaround_min < 35 then 'lt_35'
             when exp_turnaround_min < 60 then '35_60'
             when exp_turnaround_min < 120 then '60_120'
@@ -232,6 +261,7 @@ from (
         count(distinct hist_turnaround_band_n_flights) as n_ns,
         count(distinct hist_turnaround_band_avg_arr_delay_minutes) as n_avgs
     from joined
+    where exp_class != 'c'
     group by band
 )
 where n_rates > 1 or n_ns > 1 or n_avgs > 1
@@ -246,6 +276,7 @@ from (
         count(distinct hist_rotation_position_n_flights) as n_ns,
         count(distinct hist_rotation_position_avg_arr_delay_minutes) as n_avgs
     from joined
+    where exp_class != 'c'
     group by pos
 )
 where n_rates > 1 or n_ns > 1 or n_avgs > 1
@@ -259,7 +290,7 @@ select date '1900-01-01', band, 'ALL', 'band_hist_relabeled' as violation
 from (
     select
         case
-            when not exp_has_inbound then 'no_inbound'
+            when exp_class = 'b' then 'no_inbound'
             when exp_turnaround_min < 35 then 'lt_35'
             when exp_turnaround_min < 60 then '35_60'
             when exp_turnaround_min < 120 then '60_120'
@@ -267,6 +298,7 @@ from (
         end as band,
         any_value(hist_turnaround_band_n_flights) as joined_n
     from joined
+    where exp_class != 'c'
     group by band
 ) as per_band
 inner join {{ ref('int_historical_delay_rates') }} as rates
@@ -281,6 +313,7 @@ from (
         cast(least(exp_position, 6) as string) as pos,
         any_value(hist_rotation_position_n_flights) as joined_n
     from joined
+    where exp_class != 'c'
     group by pos
 ) as per_pos
 inner join {{ ref('int_historical_delay_rates') }} as rates
@@ -289,9 +322,9 @@ where per_pos.joined_n is distinct from rates.n_flights
 
 union all
 
--- tail-null rows (absent from `expected`) must carry the no_tail / 'none'
--- band history and NULL day attributes — the union branch is pinned too
-select mart.flight_date, mart.origin, mart.carrier, 'tail_null_branch_wrong' as violation
+-- tail-null mart rows (absent from `expected`) are class c under the
+-- restriction: every rotation feature NULL, hist NULL
+select mart.flight_date, mart.origin, mart.carrier, 'tail_null_not_nulled' as violation
 from mart
 left join expected
     on expected.flight_date = mart.flight_date
@@ -300,16 +333,23 @@ left join expected
     and expected.origin = mart.origin
     and expected.dest = mart.dest
     and expected.crs_dep_time = mart.crs_dep_time
-left join {{ ref('int_historical_delay_rates') }} as no_tail_rates
-    on no_tail_rates.entity_level = 'turnaround_band'
-    and no_tail_rates.entity_key = 'no_tail'
-left join {{ ref('int_historical_delay_rates') }} as none_rates
-    on none_rates.entity_level = 'rotation_position'
-    and none_rates.entity_key = 'none'
 where
     expected.flight_date is null
     and (
-        mart.legs_today is not null
-        or mart.hist_turnaround_band_n_flights is distinct from no_tail_rates.n_flights
-        or mart.hist_rotation_position_n_flights is distinct from none_rates.n_flights
+        mart.rotation_position is not null
+        or mart.legs_today is not null
+        or mart.has_inbound_leg is not null
+        or mart.sched_turnaround_min is not null
+        or mart.sched_turnaround_slack_min is not null
+        or mart.inbound_distance is not null
+        or mart.inbound_crs_elapsed_min is not null
+        or mart.is_tight_turnaround is not null
+        or mart.hist_turnaround_band_arr_del15_rate is not null
+        or mart.hist_turnaround_band_avg_arr_delay_minutes is not null
+        or mart.hist_turnaround_band_n_flights is not null
+        or mart.hist_rotation_position_arr_del15_rate is not null
+        or mart.hist_rotation_position_avg_arr_delay_minutes is not null
+        or mart.hist_rotation_position_n_flights is not null
+        -- density is the one column class c KEEPS (schedule aggregate)
+        or mart.origin_dep_density_hour is null
     )

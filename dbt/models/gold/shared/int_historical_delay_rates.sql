@@ -41,7 +41,9 @@ with training_flights as (
         flights.arr_delay_minutes,
         flights.dep_delay_minutes,
         -- rotation attributes from the shared schedule-only chain (one
-        -- definition, int_aircraft_rotation) — band keys, never NULL
+        -- definition, int_aircraft_rotation) — band keys NULL for
+        -- swap-shaped linkages (the tail-swap restriction), which the
+        -- level aggregations below exclude via their not-null filters
         rotation.turnaround_band,
         rotation.rotation_position_key
     from {{ ref('stg_gold__flights') }} as flights

@@ -32,28 +32,35 @@
 -- within the BTS service date (flight_date), the schedule-publication
 -- convention. Both choices documented here, tested downstream.
 --
--- has_inbound_leg is TRUE only when the same tail has a prior leg whose
--- scheduled gap is in [0, 14h] AND whose destination equals this leg's
--- origin (station continuity — an unrecorded ferry/positioning move is not
--- a usable inbound). Beyond 14h is an overnight/duty break (the 'first leg
--- of the day' case), negative gaps are schedule-data quirks; all take the
--- no-inbound path. Tail-unknown legs (0.34%) take their own 'no_tail' band.
--- Bands are KEYS with their own training-window history, never silent NULLs.
+-- THE TAIL-SWAP RESTRICTION (adopted 2026-07 after a gating experiment;
+-- this RESOLVES the operated-tail epistemology caveat): BTS records the
+-- OPERATED tail post-hoc, so the linkage itself can be a day-of operational
+-- outcome — same-day swaps restructure which legs chain together, and
+-- swap-shaped links carry disruption information no one had pre-departure.
+-- The experiment quantified it: with rotation features present ONLY for
+-- schedule-consistent links (91.95% consistent inbound + 3.93% clean first
+-- leg; 4.12% swap-shaped nulled), 89% of the cascade PR-AUC uplift
+-- survived (0.4652 vs 0.4748 contaminated, over the 0.3893 baseline), and
+-- the no_inbound band's training rate fell 0.388 -> 0.224 once swap rows
+-- left it — the elevated rate was substantially a swap fingerprint.
+-- Production therefore ships the RESTRICTED definition:
+--   * has_inbound_leg TRUE  — schedule-consistent inbound: gap in [0, 14h],
+--     station continuity (prior dest = this origin), prior leg not
+--     schedule-overlapped;
+--   * has_inbound_leg FALSE — clean first leg: no prior, or an overnight
+--     break (>14h) parked at this origin; keeps position/legs and its own
+--     (now clean) no_inbound band history;
+--   * has_inbound_leg NULL  — SWAP-SHAPED linkage (negative gap, continuity
+--     violation, overlapped prior, unknown tail): not schedule-explained,
+--     not knowable pre-departure -> EVERY rotation feature NULL, band NULL
+--     (excluded from the rates and from consumption). Density is kept — a
+--     schedule aggregate, not tail-based.
 --
 -- Known accepted limitation (shared with the weather join, counted there as
 -- 1 mart row): BTS '2400' scheduled times are stored as 00:00 of
 -- flight_date, so a true end-of-day midnight departure sorts ~24h early in
 -- the chain, perturbing its own and its neighbor's position/turnaround —
 -- a handful of legs, never a leak (all inputs remain schedule columns).
---
--- EPISTEMOLOGY CAVEAT, stated honestly: BTS records the OPERATED tail,
--- post-hoc. The feature VALUES are all schedule columns (leak-free), but
--- the LINKAGE reflects the realized aircraft assignment — day-of tail swaps
--- (which correlate with disruption) shape which legs chain together. BTS
--- carries no planned-assignment field, so this is the best available
--- approximation; a production system would use the airline's planned
--- rotation feed. Second-order relative to the feature values themselves;
--- disclosed in the mart header and the model-card/PR.
 -- ============================================================================
 
 with legs as (
@@ -139,22 +146,35 @@ overlap_flagged as (
 
 classified as (
 
+    -- SCHEDULE-CONSISTENCY CLASSES (the tail-swap restriction, adopted after
+    -- the 2026-07 leakage experiment — see the header):
+    --   a: consistent inbound  — gap in the duty window, station continuity,
+    --      prior not schedule-overlapped
+    --   b: clean first leg     — no prior at all, or an overnight break
+    --      (>14h) that ENDS AT THIS ORIGIN (aircraft parked here)
+    --   c: SWAP-SHAPED         — negative gap, continuity violation,
+    --      overlapped prior: the operated linkage was restructured by day-of
+    --      operations and is NOT knowable pre-departure -> every rotation
+    --      feature NULL (band included). Density is kept — it is a schedule
+    --      aggregate, not tail-based.
     select
         * except (raw_gap_min, prior_leg_overlapped),
-        -- inbound counts only when (a) the gap is inside the duty window
-        -- (negative gaps are schedule-data quirks, >14h is an overnight
-        -- break), (b) the prior leg actually ARRIVES AT THIS ORIGIN —
-        -- a station discontinuity (unrecorded ferry/positioning move, tail
-        -- data anomaly) is not a usable inbound — and (c) the prior leg is
-        -- not itself schedule-overlapped (unreliable record; see above);
-        -- all take the no-inbound path, fractions reported at build time
-        raw_gap_min is not null
-            and raw_gap_min between 0 and 840
-            and prior_dest = origin
-            and not prior_leg_overlapped as has_inbound_leg,
         case
-            when raw_gap_min is not null
-                and raw_gap_min between 0 and 840
+            -- no prior AT ALL (prior_dest NULL <=> no prior row; dest is
+            -- never NULL) -> clean first leg. A prior whose arrival is
+            -- UNKNOWN (elapsed-null leg, ~6 in 20.7M) falls through to 'c':
+            -- an unexplained linkage is not a clean first leg
+            when prior_dest is null then 'b'
+            when raw_gap_min between 0 and 840
+                and prior_dest = origin
+                and not prior_leg_overlapped then 'a'
+            when raw_gap_min > 840
+                and prior_dest = origin
+                and not prior_leg_overlapped then 'b'
+            else 'c'
+        end as link_class,
+        case
+            when raw_gap_min between 0 and 840
                 and prior_dest = origin
                 and not prior_leg_overlapped
                 then raw_gap_min
@@ -170,31 +190,38 @@ select
     origin,
     dest,
     crs_dep_time,
-    rotation_position,
-    legs_today,
+    if(link_class = 'c', null, rotation_position) as rotation_position,
+    if(link_class = 'c', null, legs_today) as legs_today,
     origin_dep_density_hour,
-    has_inbound_leg,
+    case when link_class = 'c' then null else link_class = 'a' end as has_inbound_leg,
     sched_turnaround_min,
     -- slack vs a typical 35-minute narrow-body minimum turnaround
     sched_turnaround_min - 35 as sched_turnaround_slack_min,
-    coalesce(sched_turnaround_min < 35, false) as is_tight_turnaround,
-    case when has_inbound_leg then inbound_distance end as inbound_distance,
-    case when has_inbound_leg then inbound_crs_elapsed_min end as inbound_crs_elapsed_min,
-    -- BAND KEYS for the shared historical rates (never NULL — first-leg and
-    -- unknown-tail flights get their own training-window history)
     case
-        when not has_inbound_leg then 'no_inbound'
+        when link_class = 'c' then null
+        else coalesce(sched_turnaround_min < 35, false)
+    end as is_tight_turnaround,
+    case when link_class = 'a' then inbound_distance end as inbound_distance,
+    case when link_class = 'a' then inbound_crs_elapsed_min end as inbound_crs_elapsed_min,
+    -- BAND KEYS for the shared historical rates. NULL means SWAP-SHAPED
+    -- (linkage not schedule-explained — excluded from the rates and from
+    -- consumption); clean first legs keep their own no_inbound history.
+    case
+        when link_class = 'c' then null
+        when link_class = 'b' then 'no_inbound'
         when sched_turnaround_min < 35 then 'lt_35'
         when sched_turnaround_min < 60 then '35_60'
         when sched_turnaround_min < 120 then '60_120'
         else 'ge_120'
     end as turnaround_band,
-    cast(least(rotation_position, 6) as string) as rotation_position_key
+    if(link_class = 'c', null, cast(least(rotation_position, 6) as string))
+        as rotation_position_key
 from classified
 
 union all
 
--- tail-unknown legs (0.34%): no chain, own band, position NULL
+-- tail-unknown legs (0.34%): no chain — class c under the restriction
+-- (linkage not knowable), every rotation feature NULL, density kept
 select
     flight_date,
     carrier,
@@ -205,13 +232,13 @@ select
     cast(null as int64) as rotation_position,
     cast(null as int64) as legs_today,
     origin_dep_density_hour,
-    false as has_inbound_leg,
+    cast(null as bool) as has_inbound_leg,
     null as sched_turnaround_min,
     null as sched_turnaround_slack_min,
-    false as is_tight_turnaround,
+    cast(null as bool) as is_tight_turnaround,
     null as inbound_distance,
     null as inbound_crs_elapsed_min,
-    'no_tail' as turnaround_band,
-    'none' as rotation_position_key
+    cast(null as string) as turnaround_band,
+    cast(null as string) as rotation_position_key
 from legs
 where tail_number is null
