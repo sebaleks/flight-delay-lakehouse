@@ -35,21 +35,41 @@ design removes the channel by construction.
 | `data.py`     | Load the mart from BigQuery (ADC), typed, canonically sorted |
 | `train.py`    | Split, fit both models, evaluate on held-out rows, artifacts |
 
-## Headline (cascade/rotation + hourly weather, held-out Jul–Dec 2024)
+## Headline (cascade/rotation RESTRICTED + hourly weather, held-out Jul–Dec 2024)
 
-| Metric | Hourly weather (previous) | + Cascade/rotation | Δ |
+| Metric | Hourly weather | Cascade (contaminated) | **Cascade RESTRICTED (shipping)** |
 |---|---|---|---|
-| XGB ROC-AUC | 0.6979 | **0.7397** | +0.0418 |
-| XGB PR-AUC (headline) | 0.3893 | **0.4748** | +0.0855 (+22.0% rel.) |
-| Regression RMSE | 51.70 | **49.56** | −2.14 |
-| Regression MAE | 20.22 | **19.00** | −1.22 |
-| Logreg ROC / PR-AUC | 0.6550 / 0.3310 | 0.6920 / 0.3998 | +0.0370 / +0.0688 |
+| XGB ROC-AUC | 0.6979 | 0.7397 | **0.7389** |
+| XGB PR-AUC (headline) | 0.3893 | 0.4748 | **0.4652** |
+| Regression RMSE / MAE | 51.70 / 20.22 | 49.56 / 19.00 | **49.71 / 19.10** |
+| Logreg ROC / PR-AUC | 0.6550 / 0.3310 | 0.6920 / 0.3998 | 0.6654 / 0.3382 |
+
+**THE TAIL-SWAP RESTRICTION (resolved 2026-07; the shipping definition).**
+BTS records the post-hoc OPERATED tail, so the rotation LINKAGE can itself
+be a day-of outcome — same-day swaps restructure which legs chain together.
+The gating experiment: rotation features present ONLY for
+schedule-consistent links (91.95% consistent inbound, 3.93% clean first
+leg; 4.12% swap-shaped → NULL). **89% of the cascade PR-AUC uplift
+survived** (+0.0759 of +0.0855 over the hourly baseline); the ~11% that did
+not was swap-linkage, with the mechanism verified at the feature level: the
+no_inbound band's training delay rate fell **0.388 → 0.224** once
+swap-shaped rows left it — the elevated rate was substantially a swap
+fingerprint. The retrained model reorganized as a real-signal hypothesis
+predicts: the CLEANED turnaround-band feature rose to #2 in importance
+while operated-chain rotation-position (which absorbs swap restructuring)
+fell #4 → #8. Production ships the restricted definition; **0.7389 /
+0.4652 is the honest headline**.
+
+**Honest logreg note:** the linear baseline retains little of the cascade
+uplift under the restriction (0.3382 vs 0.3310 hourly) — it median-imputes
+the 4.12% all-NULL rows and loses the band separation the cleaning
+compressed. The surviving signal is largely tree-accessible (XGBoost
+consumes the NULLs natively).
 
 Every generation is a controlled comparison: identical row set (20,240,662),
 identical `is_training_row` split (16,678,880 / 3,561,782), identical
 hyperparameters — each delta is attributable to its feature change alone.
-The linear baseline moving too confirms the signal is in the features, not
-a tree-specific artifact. PR-AUC base rate is 0.1969 (lift 1.98→2.41).
+PR-AUC base rate is 0.1969 (lift 1.98→2.36 restricted).
 
 **Morning vs evening (lift over prevalence, XGB), across generations:**
 
@@ -57,7 +77,7 @@ a tree-specific artifact. PR-AUC base rate is 0.1969 (lift 1.98→2.41).
 |---|---|---|
 | Daily prior-day weather | 1.61× | 1.53× |
 | Hourly at-departure weather | 1.94× | 1.71× |
-| + Cascade/rotation | **2.66×** | **1.98×** |
+| + Cascade/rotation (restricted, shipping) | **2.56×** | **1.95×** |
 
 The hourly-weather generation showed mornings gaining most from
 time-resolved weather (not staleness — the arithmetic runs the other way;
@@ -65,7 +85,9 @@ morning conditions are simply closer to the whole story before disruption
 accumulates). The cascade generation then REFUTED its own pre-registered
 hypothesis: we predicted cascade features would lift evenings most (evening
 outcomes being cascade-dominated), and the table says mornings gained
-nearly three times more. The post-hoc reading — explicitly labeled as
+nearly three times more. **The refutation stands on the clean model**
+(restricted: morning Δlift +0.62 vs evening +0.24 over the hourly
+baseline). The post-hoc reading — explicitly labeled as
 interpretation after the fact — is that features pay off where the exposure
 they measure VARIES, not where its effects dominate: by evening nearly
 every tail is deep in rotation (uniform exposure, weak discrimination),
@@ -73,16 +95,23 @@ while mornings span the full first-leg-to-red-eye-turnaround gradient
 (position-1 risk 14.2% vs position-6+ 29.4% in the training window).
 
 **Determinism, stated precisely:** the headline is **reproducible across
-mart rebuilds** — verified on the cascade mart: a full dbt rebuild of the
-rotation chain, the shared rates, and `ml_flight_features`, followed by a
-complete retrain, reproduced `metrics.json` byte-identically
-(ROC 0.7396687332 / PR-AUC 0.4748073992; the same protocol verified the
-hourly-era and daily-era headlines before it, and repeated fits on a fixed
-frame were already 5/5 bit-identical — the loader's canonical sort removes
-read-order sensitivity). Precision of the claim: the rebuild stability is
-an empirical result — the observed rebuilds reproduced the mart values to
-the last bit — not a BigQuery contract about distributed aggregation order;
-a future rebuild shifting last bits would move metrics within the
+mart rebuilds** — verified on the restricted mart TWO ways: the production
+dbt rebuild (rotation chain + shared rates + `ml_flight_features`) followed
+by a complete retrain reproduced `metrics.json` byte-identically against
+the experiment run built through an entirely DIFFERENT construction path
+(a passthrough-patch variant table), and again across a second full
+rebuild+retrain. A final review-driven edge refinement (a prior leg whose
+scheduled arrival is unknown classes as swap-shaped, not as a clean first
+leg — ~6 rows in 20.7M) then received its own rebuild-pair verification:
+two more independent full rebuild+retrains, byte-identical at
+**ROC 0.7388902208 / PR-AUC 0.4651540494** — the pinned headline. (The
+same protocol verified the cascade-, hourly- and daily-era headlines
+before it, and repeated fits on a fixed frame were already 5/5
+bit-identical — the loader's canonical sort removes read-order
+sensitivity.) Precision of the claim: the rebuild stability is an
+empirical result — the observed rebuilds reproduced the mart values to
+the last bit — not a BigQuery contract about distributed aggregation
+order; a future rebuild shifting last bits would move metrics within the
 historical ±0.002 band, visible immediately against the pinned headline.
 
 Model artifacts go to `ml/artifacts/` (git-ignored).
