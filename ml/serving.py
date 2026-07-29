@@ -31,11 +31,14 @@ Feature parity with training:
     callers with the aircraft's planned rotation pass it per request (the
     demo passes its proxy schedule's historical rotation; production would
     use the airline's planning feed); callers WITHOUT it get the TYPICAL
-    rotation profile — training medians, because the mart has essentially
-    no tail-unknown rows and NaN here sits outside the training
-    distribution — flagged per response as an estimate. The band derivation
-    mirrors int_aircraft_rotation (pinned by the dbt guard on the SQL side);
-    band/position hist values come from the mart byte-exactly.
+    rotation profile — training medians, flagged per response. Why not
+    NULL: under the tail-swap restriction, all-NULL rotation is
+    in-distribution but MEANS "operated linkage was swap-restructured" —
+    a merely-unknown future plan is not swap-shaped, so NULL would
+    misclassify it; the typical profile estimates the real unknown plan.
+    The band derivation mirrors int_aircraft_rotation (pinned by the dbt
+    guard on the SQL side); band/position hist values come from the mart
+    byte-exactly.
     origin_dep_density_hour without a caller value is ESTIMATED as the
     (origin, hour, weekday) median over the mart — a published-schedule
     quantity we lack a future feed for; part of the serve-side gap like
@@ -92,7 +95,7 @@ class FlightRequest:
     # this comes from the airline's planned-rotation feed; the demo passes
     # its proxy schedule's historical rotation. Callers WITHOUT the context
     # get the TYPICAL rotation profile (training medians) — flagged in the
-    # response as an estimate; see _load_rotation_hist for why not NaN.
+    # response as an estimate; see _load_rotation_hist for why not NULL.
     rotation_position: int | None = None
     legs_today: int | None = None
     sched_turnaround_min: float | None = None
@@ -324,7 +327,7 @@ def _rotation_features(fl: FlightRequest, ctx: ServingContext, density: float) -
     mart derives them (first-leg context -> the no_inbound band, matching
     training). Without context: the TYPICAL rotation profile — training
     medians for the schedule attributes, band/position keys derived from
-    them — because NaN here is outside the training distribution (see
+    them — NULL would mislabel an unknown plan as swap-shaped (see
     _load_rotation_hist); the response flags the estimate."""
     has_context = fl.rotation_position is not None
     typ = ctx.rotation_hist.get("typical", {})

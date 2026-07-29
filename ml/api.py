@@ -48,8 +48,8 @@ class FlightIn(BaseModel):
     # domestic leg (~5,000 mi)
     distance: float | None = Field(default=None, gt=0, lt=20000)
     # OPTIONAL aircraft-rotation context, all SCHEDULE-derived (see
-    # ml/serving.py): provide it if you know the planned rotation; omit it
-    # for the training 'no_tail' aircraft-unknown path
+    # ml/serving.py): provide it if you know the planned rotation; omitting
+    # it yields the TYPICAL-profile estimate, flagged in the response
     rotation_position: int | None = Field(default=None, ge=1, le=30)
     legs_today: int | None = Field(default=None, ge=1, le=30)
     sched_turnaround_min: float | None = Field(default=None, ge=0, le=840)
