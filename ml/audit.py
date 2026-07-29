@@ -85,8 +85,10 @@ def run_audit(bq: bigquery.Client, dataset: str) -> list[str]:
         "provenance (enforced by dbt standing guards on the mart): hist_* = "
         "training-window rates smoothed toward the global (constant within "
         "an entity, train and test alike); origin weather = last hourly ISD "
-        "observation at or before scheduled departure; holiday flags = "
-        "generated calendar"
+        "observation at or before scheduled departure; rotation features = "
+        "SCHEDULE columns only — the prior leg's ACTUAL arrival delay is "
+        "post-departure information and is NEVER an input (value-level pin: "
+        "assert_ml_rotation_schedule_only); holiday flags = generated calendar"
     )
     return list(f.FEATURES)
 

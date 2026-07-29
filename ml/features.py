@@ -36,6 +36,15 @@ NUMERIC_FEATURES = [
     "hist_dest_arr_del15_rate",
     "hist_dest_avg_arr_delay_minutes",
     "hist_dest_n_flights",
+    # cascade grains: the leak-free substitute for actual inbound delay —
+    # TRAINING-WINDOW tendency of a scheduled-rotation profile to run late,
+    # smoothed like every hist_* grain; band keys never NULL
+    "hist_turnaround_band_arr_del15_rate",
+    "hist_turnaround_band_avg_arr_delay_minutes",
+    "hist_turnaround_band_n_flights",
+    "hist_rotation_position_arr_del15_rate",
+    "hist_rotation_position_avg_arr_delay_minutes",
+    "hist_rotation_position_n_flights",
     # origin weather AT THE SCHEDULED DEPARTURE HOUR: last hourly ISD
     # observation at or before scheduled departure (3h staleness ceiling).
     # visibility right-censored at 10.0 mi; gust 0.0-when-unreported with the
@@ -53,6 +62,18 @@ NUMERIC_FEATURES = [
     "origin_had_snow_ice_pellets",
     "origin_had_thunder",
     "has_origin_weather",
+    # cascade / aircraft-rotation SCHEDULE features (knowable at booking):
+    # the prior leg's ACTUAL arrival delay is post-departure information for
+    # this flight and is never an input — see FORBIDDEN_FEATURES
+    "rotation_position",
+    "legs_today",
+    "origin_dep_density_hour",
+    "has_inbound_leg",
+    "sched_turnaround_min",
+    "sched_turnaround_slack_min",
+    "is_tight_turnaround",
+    "inbound_distance",
+    "inbound_crs_elapsed_min",
     # holiday calendar (knowable years ahead)
     "is_holiday",
     "is_day_before_holiday",
@@ -120,5 +141,15 @@ FORBIDDEN_FEATURES = frozenset(
         "div_actual_elapsed_time",
         "div_arr_delay",
         "div_distance",
+        # prior-leg / inbound ACTUALS — the tempting cascade leak: realized
+        # inbound outcomes are post-departure information for this flight
+        "inbound_arr_delay",
+        "inbound_arr_delay_minutes",
+        "inbound_arr_del15",
+        "inbound_dep_delay",
+        "inbound_arr_time",
+        "prior_leg_arr_delay",
+        "prior_leg_arr_del15",
+        "prior_arr_delay_minutes",
     }
 )
