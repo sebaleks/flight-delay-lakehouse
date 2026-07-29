@@ -119,6 +119,15 @@ Two independent consumption models live in gold:
   is a **label or forbidden feature**, never an input. Weather features must use
   forecast-available / historical data, not same-flight realized conditions.
   When adding a feature, explicitly justify it is pre-departure-known.
+  The rule extends to LINKAGE, not just values (decided 2026-07, the
+  tail-swap experiment): rotation features chain legs by the post-hoc
+  OPERATED tail, and a swap-restructured linkage is itself a day-of outcome —
+  so rotation features exist **only for schedule-consistent links**
+  (swap-shaped: NULL). The experiment: 89% of the cascade uplift survived
+  the restriction; the mechanism (no_inbound band rate 0.388→0.224 clean)
+  and the full three-way comparison live in `int_aircraft_rotation`'s
+  header and PR #18. Current held-out headline: **ROC 0.7389 /
+  PR-AUC 0.4652** (restricted; details in `ml/README.md`).
 
 ## 10. Repo Layout (see README for detail)
 

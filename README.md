@@ -36,6 +36,17 @@ predict delays using only pre-departure information.
         Dagster (orchestration/) drives:  ingest ──► dbt ──► ML   (added last)
 ```
 
+**Current model (held-out Jul–Dec 2024): ROC 0.7389 / PR-AUC 0.4652** —
+three controlled feature generations (daily → hourly-at-departure weather →
+cascade/rotation), with rotation features **restricted to
+schedule-consistent tail linkages** after the 2026-07 tail-swap leakage
+experiment (89% of the cascade uplift survived; swap-shaped links are NULL —
+mechanism and three-way comparison in `ml/README.md` and
+`dbt/models/gold/shared/int_aircraft_rotation.sql`). Four standing dbt
+guards (three pin the ML leakage boundary — schema allowlist, weather
+obs-before-departure, rotation schedule-only — plus the airport-timezone
+pin); metrics byte-reproducible across full mart rebuilds.
+
 ## Repository layout
 
 ```
@@ -120,7 +131,12 @@ uv run dbt debug --project-dir dbt      # verifies BigQuery + ADC connectivity
 - [x] ML: time-split, classifier (`ArrDel15`), regressor (`ArrDelayMinutes`)
 - [x] Performance benchmark: `fact_flights` partition/cluster pruning (see `docs/benchmarks/`)
 - [x] Dashboard: Streamlit app over the gold `dash_*` views (see `dashboard/`)
-- [ ] Dagster: wire ingest → dbt → ML (added last)
+- [x] Dagster: ingest → dbt → ML wired, blocking asset checks, monthly schedule
+- [x] CI: `pr-checks` (gitleaks, dbt parse, Dagster definitions validate, ruff)
+- [x] Feature gen 2: hourly ISD weather at the scheduled departure hour
+- [x] Feature gen 3: cascade/aircraft-rotation (tail-swap-restricted; see above)
+- [x] Forecast inference endpoint (FastAPI + NWS/NDFD at the departure hour)
+- [ ] Hyperparameter tuning (Stage 3), probability calibration (Stage 4), blog
 
-The end-to-end pipeline runs; **Dagster orchestration is the remaining piece**
-(intentionally added last, per CLAUDE.md §6).
+The full pipeline runs end-to-end under Dagster. Open PRs at any time are
+listed on GitHub; the model headline above is the tail-swap-restricted number.

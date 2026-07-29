@@ -98,12 +98,20 @@
 --     the leak-free substitute is hist_turnaround_band_* /
 --     hist_rotation_position_*: the TRAINING-WINDOW tendency of a rotation
 --     profile to run late, from the shared rates model, smoothed exactly
---     like every other hist_* grain. Band keys are never NULL (first-leg,
---     overnight-break and unknown-tail flights carry their own bands with
---     their own history). Red-eyes: the chain links by UTC timestamps across
+--     like every other hist_* grain. THE TAIL-SWAP RESTRICTION (adopted
+--     2026-07, gating experiment in int_aircraft_rotation's header): the
+--     operated-tail LINKAGE is itself a day-of outcome when swaps
+--     restructure it, so rotation features exist ONLY for
+--     schedule-consistent links — swap-shaped linkages (4.12% of rows) are
+--     NULL across every rotation and rotation-hist column. The experiment:
+--     89% of the cascade PR-AUC uplift survived the restriction
+--     (0.4652 restricted vs 0.4748 contaminated vs 0.3893 baseline); the
+--     no_inbound band rate fell 0.388 -> 0.224 once swap rows left it.
+--     Red-eyes: the chain links by UTC timestamps across
 --     midnight; day position counts within the BTS service date.
---     assert_ml_rotation_schedule_only recomputes the turnaround from silver
---     schedule columns independently and pins it value-level over the table.
+--     assert_ml_rotation_schedule_only recomputes the full rotation feature
+--     set (classes included) from silver schedule columns independently and
+--     pins it value-level over the table.
 -- Labels are prefixed label_ and are the ONLY post-departure columns.
 -- assert_ml_features_no_leakage pins this table's schema to the audited
 -- column allowlist and fails on ANY unexpected column.
@@ -318,8 +326,10 @@ select
     origin_weather_obs_ts_utc,
 
     -- cascade / aircraft-rotation schedule features (see header: schedule
-    -- columns only; prior-leg ACTUALS never enter; NULL paths for first-leg
-    -- and unknown-tail flights ride the has_inbound_leg indicator)
+    -- columns only; prior-leg ACTUALS never enter. Three-state
+    -- has_inbound_leg: TRUE = consistent inbound, FALSE = clean first leg,
+    -- NULL = swap-shaped linkage with every rotation feature NULL except
+    -- density — the tail-swap restriction)
     rotation_position,
     legs_today,
     origin_dep_density_hour,
