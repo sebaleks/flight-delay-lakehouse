@@ -51,7 +51,8 @@
 --     break (>14h) parked at this origin; keeps position/legs and its own
 --     (now clean) no_inbound band history;
 --   * has_inbound_leg NULL  — SWAP-SHAPED linkage (negative gap, continuity
---     violation, overlapped prior, unknown tail): not schedule-explained,
+--     violation, overlapped prior, unknown tail, prior with unknown
+--     scheduled arrival): not schedule-explained,
 --     not knowable pre-departure -> EVERY rotation feature NULL, band NULL
 --     (excluded from the rates and from consumption). Density is kept — a
 --     schedule aggregate, not tail-based.

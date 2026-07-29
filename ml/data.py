@@ -2,10 +2,12 @@
 dashboard consumes; nothing is recomputed or duplicated here.
 
 Downcasts to float32/int8/category so the full 20.2M-row mart fits
-comfortably in memory. NaNs in hist_* (entities new in the test window) and
-weather (no in-window observation at scheduled departure) are preserved — XGBoost consumes them
-natively; the logistic-regression pipeline imputes with TRAIN-set medians
-only (never test statistics).
+comfortably in memory. NaNs in hist_* (entities new in the test window; the
+rotation grains on swap-shaped links — the tail-swap restriction — train and
+test alike), rotation attributes (same restriction), and weather (no
+in-window observation at scheduled departure) are preserved — XGBoost
+consumes them natively; the logistic-regression pipeline imputes with
+TRAIN-set medians only (never test statistics).
 """
 
 from __future__ import annotations

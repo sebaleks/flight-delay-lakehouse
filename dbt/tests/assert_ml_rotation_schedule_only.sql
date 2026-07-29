@@ -16,7 +16,9 @@
 --     schedule-derived key: a band derived from actuals in the int model
 --     would split a recomputed band across multiple hist values);
 --   * class-aware flag semantics (a TRUE / b FALSE / c NULL) + full
---     nulling of swap-shaped rows + clean-first-leg attribute rules.
+--     nulling of swap-shaped rows + clean-first-leg attribute rules;
+--   * the CONVERSE direction: clean (class-a/b) rows must CARRY all six
+--     hist values — rotation-hist NULL must mean class c, nothing else.
 -- The chain is recomputed over ALL scheduled legs (including later-cancelled
 -- ones — unknowable at prediction time), exactly the int-model convention,
 -- with the same duty window (0-14h), station-continuity rule (prior dest =
@@ -213,6 +215,27 @@ where exp_class = 'c' and (
     or hist_rotation_position_arr_del15_rate is not null
     or hist_rotation_position_avg_arr_delay_minutes is not null
     or hist_rotation_position_n_flights is not null
+)
+
+union all
+
+-- the CONVERSE of swap_shaped_not_nulled (added after the pre-merge review:
+-- two independent reviewers converged on the hole): clean links must
+-- actually CARRY their hist values. Bands and positions are CLOSED sets,
+-- every key present in the training window, so NULL hist on a class-a/b row
+-- means the band key was lost upstream — and no other arm can see that:
+-- the constancy arms count DISTINCT non-null values (an all-NULL band
+-- passes as 0 distinct), and the identity arms' inner join silently drops
+-- an entity row that vanished from the rates model along with its key
+select flight_date, origin, carrier, 'clean_link_hist_missing' as violation
+from joined
+where exp_class != 'c' and (
+    hist_turnaround_band_arr_del15_rate is null
+    or hist_turnaround_band_avg_arr_delay_minutes is null
+    or hist_turnaround_band_n_flights is null
+    or hist_rotation_position_arr_del15_rate is null
+    or hist_rotation_position_avg_arr_delay_minutes is null
+    or hist_rotation_position_n_flights is null
 )
 
 union all

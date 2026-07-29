@@ -26,7 +26,8 @@ models:
       after the gating experiment — see the model header): rotation features
       exist ONLY for schedule-consistent links; swap-shaped linkages
       (negative gap, station-continuity violation, overlapped prior, unknown
-      tail — 4.12% of legs) carry NULL for every rotation column INCLUDING
+      tail, prior with unknown scheduled arrival — 4.12% of legs) carry NULL
+      for every rotation column INCLUDING
       the band keys, and are excluded from the rates. A NULL band means
       "linkage not schedule-explained", never a silent default. One row per
       scheduled leg; the ML mart and int_historical_delay_rates both ref()
