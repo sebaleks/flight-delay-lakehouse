@@ -118,26 +118,48 @@ with_turnaround as (
 
 ),
 
+overlap_flagged as (
+
+    -- a leg whose own gap is negative OVERLAPS its predecessor's scheduled
+    -- interval — the tail record there is unreliable (2/3 of overlaps
+    -- exceed 30 min, i.e. phantom/duplicate entries, not rounding); its
+    -- SUCCESSOR must not treat it as a trustworthy inbound: fail closed
+    select
+        *,
+        coalesce(
+            lag(raw_gap_min < 0) over (
+                partition by tail_number
+                order by dep_ts_utc, carrier, flight_number, origin, dest
+            ),
+            false
+        ) as prior_leg_overlapped
+    from with_turnaround
+
+),
+
 classified as (
 
     select
-        * except (raw_gap_min),
+        * except (raw_gap_min, prior_leg_overlapped),
         -- inbound counts only when (a) the gap is inside the duty window
         -- (negative gaps are schedule-data quirks, >14h is an overnight
-        -- break) AND (b) the prior leg actually ARRIVES AT THIS ORIGIN —
+        -- break), (b) the prior leg actually ARRIVES AT THIS ORIGIN —
         -- a station discontinuity (unrecorded ferry/positioning move, tail
-        -- data anomaly) is not a usable inbound; both take the no-inbound
-        -- path, fraction reported at build time
+        -- data anomaly) is not a usable inbound — and (c) the prior leg is
+        -- not itself schedule-overlapped (unreliable record; see above);
+        -- all take the no-inbound path, fractions reported at build time
         raw_gap_min is not null
             and raw_gap_min between 0 and 840
-            and prior_dest = origin as has_inbound_leg,
+            and prior_dest = origin
+            and not prior_leg_overlapped as has_inbound_leg,
         case
             when raw_gap_min is not null
                 and raw_gap_min between 0 and 840
                 and prior_dest = origin
+                and not prior_leg_overlapped
                 then raw_gap_min
         end as sched_turnaround_min
-    from with_turnaround
+    from overlap_flagged
 
 )
 

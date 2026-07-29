@@ -82,16 +82,31 @@ expected as (
         exp_density,
         prior_arr_ts is not null
             and timestamp_diff(dep_ts, prior_arr_ts, minute) between 0 and 840
-            and prior_dest = origin as exp_has_inbound,
+            and prior_dest = origin
+            and not prior_overlapped as exp_has_inbound,
         case
             when prior_arr_ts is not null
                 and timestamp_diff(dep_ts, prior_arr_ts, minute) between 0 and 840
                 and prior_dest = origin
+                and not prior_overlapped
                 then timestamp_diff(dep_ts, prior_arr_ts, minute)
         end as exp_turnaround_min,
         prior_distance,
         prior_elapsed
-    from chained
+    from (
+        select
+            *,
+            -- mirror the int model's overlap fail-closed rule: a prior leg
+            -- whose own gap was negative is not a trustworthy inbound
+            coalesce(
+                lag(timestamp_diff(dep_ts, prior_arr_ts, minute) < 0) over (
+                    partition by tail_number
+                    order by dep_ts, carrier, flight_number, origin, dest
+                ),
+                false
+            ) as prior_overlapped
+        from chained
+    )
 
 ),
 
@@ -103,7 +118,9 @@ mart as (
         is_tight_turnaround, inbound_distance, inbound_crs_elapsed_min,
         rotation_position, legs_today, origin_dep_density_hour,
         hist_turnaround_band_arr_del15_rate, hist_turnaround_band_n_flights,
-        hist_rotation_position_arr_del15_rate, hist_rotation_position_n_flights
+        hist_turnaround_band_avg_arr_delay_minutes,
+        hist_rotation_position_arr_del15_rate, hist_rotation_position_n_flights,
+        hist_rotation_position_avg_arr_delay_minutes
     from {{ ref('ml_flight_features') }}
 
 ),
@@ -178,6 +195,10 @@ where
         or sched_turnaround_slack_min is not null
         or inbound_distance is not null
         or inbound_crs_elapsed_min is not null
+        -- no-inbound rows must be exactly FALSE (the coalesce in the int
+        -- model), never NULL — a silent FALSE->NULL distribution change
+        -- in a model feature must fail here
+        or is_tight_turnaround is distinct from false
     )
 
 union all
@@ -208,11 +229,12 @@ from (
             else 'ge_120'
         end as band,
         count(distinct hist_turnaround_band_arr_del15_rate) as n_rates,
-        count(distinct hist_turnaround_band_n_flights) as n_ns
+        count(distinct hist_turnaround_band_n_flights) as n_ns,
+        count(distinct hist_turnaround_band_avg_arr_delay_minutes) as n_avgs
     from joined
     group by band
 )
-where n_rates > 1 or n_ns > 1
+where n_rates > 1 or n_ns > 1 or n_avgs > 1
 
 union all
 
@@ -221,11 +243,12 @@ from (
     select
         cast(least(exp_position, 6) as string) as pos,
         count(distinct hist_rotation_position_arr_del15_rate) as n_rates,
-        count(distinct hist_rotation_position_n_flights) as n_ns
+        count(distinct hist_rotation_position_n_flights) as n_ns,
+        count(distinct hist_rotation_position_avg_arr_delay_minutes) as n_avgs
     from joined
     group by pos
 )
-where n_rates > 1 or n_ns > 1
+where n_rates > 1 or n_ns > 1 or n_avgs > 1
 
 union all
 
@@ -263,3 +286,30 @@ from (
 inner join {{ ref('int_historical_delay_rates') }} as rates
     on rates.entity_level = 'rotation_position' and rates.entity_key = per_pos.pos
 where per_pos.joined_n is distinct from rates.n_flights
+
+union all
+
+-- tail-null rows (absent from `expected`) must carry the no_tail / 'none'
+-- band history and NULL day attributes — the union branch is pinned too
+select mart.flight_date, mart.origin, mart.carrier, 'tail_null_branch_wrong' as violation
+from mart
+left join expected
+    on expected.flight_date = mart.flight_date
+    and expected.carrier = mart.carrier
+    and expected.flight_number is not distinct from mart.flight_number
+    and expected.origin = mart.origin
+    and expected.dest = mart.dest
+    and expected.crs_dep_time = mart.crs_dep_time
+left join {{ ref('int_historical_delay_rates') }} as no_tail_rates
+    on no_tail_rates.entity_level = 'turnaround_band'
+    and no_tail_rates.entity_key = 'no_tail'
+left join {{ ref('int_historical_delay_rates') }} as none_rates
+    on none_rates.entity_level = 'rotation_position'
+    and none_rates.entity_key = 'none'
+where
+    expected.flight_date is null
+    and (
+        mart.legs_today is not null
+        or mart.hist_turnaround_band_n_flights is distinct from no_tail_rates.n_flights
+        or mart.hist_rotation_position_n_flights is distinct from none_rates.n_flights
+    )

@@ -20,6 +20,15 @@
 -- present). n_flights is kept so consumers can regularize sparse entities;
 -- entities that first appear in the test window are simply absent — consumers
 -- LEFT JOIN and keep the NULL rather than inventing a rate.
+--
+-- Cutoff-boundary note for the rotation grains, stated precisely: a
+-- pre-cutoff row's band derives from the SCHEDULE of its chain neighbors,
+-- which near the boundary can include a post-cutoff service-date leg (UTC
+-- chaining vs service-date split). This is published-schedule information —
+-- knowable at booking, long before either date — and NO OUTCOME crosses the
+-- cutoff (this WHERE filters outcome rows strictly pre-cutoff). Schedule is
+-- exempt from split isolation by the same principle that makes the cascade
+-- features leak-free at all.
 -- ============================================================================
 
 with training_flights as (
