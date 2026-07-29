@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException
 from google.cloud import bigquery
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ml.serving import FlightRequest, ServingContext, build_context, predict
 
@@ -29,6 +29,7 @@ async def lifespan(_app: FastAPI):
     global _ctx
     _ctx = build_context()
     yield
+    _ctx = None  # a torn-down app must not mask the next startup's failures
 
 
 app = FastAPI(title="flight-delay inference", lifespan=lifespan)
@@ -46,6 +47,15 @@ class FlightIn(BaseModel):
     # physically invalid vector; bound comfortably above the longest US
     # domestic leg (~5,000 mi)
     distance: float | None = Field(default=None, gt=0, lt=20000)
+    # OPTIONAL aircraft-rotation context, all SCHEDULE-derived (see
+    # ml/serving.py): provide it if you know the planned rotation; omit it
+    # for the training 'no_tail' aircraft-unknown path
+    rotation_position: int | None = Field(default=None, ge=1, le=30)
+    legs_today: int | None = Field(default=None, ge=1, le=30)
+    sched_turnaround_min: float | None = Field(default=None, ge=0, le=840)
+    inbound_distance: float | None = Field(default=None, gt=0, lt=20000)
+    inbound_crs_elapsed_min: float | None = Field(default=None, gt=0, le=900)
+    origin_dep_density_hour: float | None = Field(default=None, gt=0, le=500)
 
     @field_validator("origin", "dest", "carrier")
     @classmethod
@@ -53,6 +63,39 @@ class FlightIn(BaseModel):
         # BTS codes are uppercase; lowercase input would silently miss the
         # airport/hist lookups and score as unseen categories
         return v.upper()
+
+    @model_validator(mode="after")
+    def _rotation_coherence(self) -> FlightIn:
+        # incoherent rotation context must 422, never assemble. NOTE: a
+        # turnaround WITH rotation_position=1 is valid — training contains
+        # ~3M first-of-service-date legs whose overnight gap fits the 14h
+        # duty window (their inbound is yesterday's last leg).
+        if self.rotation_position is None and any(
+            v is not None
+            for v in (
+                self.sched_turnaround_min,
+                self.inbound_distance,
+                self.inbound_crs_elapsed_min,
+                self.legs_today,
+            )
+        ):
+            raise ValueError("rotation fields require rotation_position")
+        if (
+            self.rotation_position is not None
+            and self.legs_today is not None
+            and self.legs_today < self.rotation_position
+        ):
+            raise ValueError("legs_today cannot be less than rotation_position")
+        # an inbound is all-or-nothing: training rows with has_inbound_leg
+        # always carry the inbound's distance and duration — a partial
+        # inbound would assemble a pattern training never produced
+        inbound = (self.sched_turnaround_min, self.inbound_distance, self.inbound_crs_elapsed_min)
+        if any(v is not None for v in inbound) and not all(v is not None for v in inbound):
+            raise ValueError(
+                "sched_turnaround_min, inbound_distance and inbound_crs_elapsed_min "
+                "must be provided together"
+            )
+        return self
 
 
 class BatchIn(BaseModel):
@@ -92,7 +135,10 @@ def demo_ord(target_date: date | None = None) -> list[dict]:
     from the same weekday 104 weeks earlier (inside the 2022-2024 mart
     window) to the target date — a realistic schedule shape, clearly labeled
     a proxy. A production deployment would swap in a real schedule feed; the
-    prediction path is identical either way.
+    prediction path is identical either way. The proxy includes its
+    historical ROTATION structure (positions, turnarounds, density) — all
+    schedule-derived, passed through as the rotation context a planning
+    feed would provide.
     """
     ctx = _ctx_or_503()
     # "tomorrow" in ORD's own timezone — a UTC deployment queried overnight
@@ -101,7 +147,9 @@ def demo_ord(target_date: date | None = None) -> list[dict]:
     proxy_day = target - timedelta(weeks=104)  # same weekday, in-mart
     rows = ctx.bq.query(
         f"select carrier, dest, format_time('%H:%M', crs_dep_time) as dep_time, "
-        f"cast(crs_arr_hour as int64) as arr_hour, any_value(distance) as distance "
+        f"cast(crs_arr_hour as int64) as arr_hour, any_value(distance) as distance, "
+        f"any_value(struct(rotation_position, legs_today, sched_turnaround_min, "
+        f"inbound_distance, inbound_crs_elapsed_min, origin_dep_density_hour)) as rot "
         f"from `{ctx.bq.project}.{ctx.gold}.ml_flight_features` "
         f"where origin = 'ORD' and flight_date = @d "
         f"group by carrier, dest, dep_time, arr_hour",
@@ -109,6 +157,10 @@ def demo_ord(target_date: date | None = None) -> list[dict]:
             query_parameters=[bigquery.ScalarQueryParameter("d", "DATE", proxy_day)]
         ),
     ).result()
+
+    def _opt(v, cast=float):
+        return cast(v) if v is not None else None
+
     flights = [
         FlightRequest(
             origin="ORD",
@@ -118,6 +170,12 @@ def demo_ord(target_date: date | None = None) -> list[dict]:
             dep_time=r["dep_time"],
             arr_time=f"{int(r['arr_hour']):02d}:30",
             distance=float(r["distance"]),
+            rotation_position=_opt(r["rot"]["rotation_position"], int),
+            legs_today=_opt(r["rot"]["legs_today"], int),
+            sched_turnaround_min=_opt(r["rot"]["sched_turnaround_min"]),
+            inbound_distance=_opt(r["rot"]["inbound_distance"]),
+            inbound_crs_elapsed_min=_opt(r["rot"]["inbound_crs_elapsed_min"]),
+            origin_dep_density_hour=_opt(r["rot"]["origin_dep_density_hour"]),
         )
         for r in rows
     ]
