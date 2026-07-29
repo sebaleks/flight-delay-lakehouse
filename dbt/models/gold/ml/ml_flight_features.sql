@@ -90,6 +90,20 @@
 --     AND the lookback window at the value level over the FULL table via the
 --     origin_weather_obs_ts_utc bookkeeping column.
 --   * holiday flags: generated calendar — known years ahead.
+--   * CASCADE / AIRCRAFT-ROTATION features (int_aircraft_rotation, shared):
+--     ALL from SCHEDULE columns — turnaround, rotation position, legs/day,
+--     inbound-leg distance/duration, origin same-hour departure density are
+--     knowable at booking. THE RULE: the prior leg's ACTUAL arrival delay is
+--     post-departure information for this flight and is NEVER a feature —
+--     the leak-free substitute is hist_turnaround_band_* /
+--     hist_rotation_position_*: the TRAINING-WINDOW tendency of a rotation
+--     profile to run late, from the shared rates model, smoothed exactly
+--     like every other hist_* grain. Band keys are never NULL (first-leg,
+--     overnight-break and unknown-tail flights carry their own bands with
+--     their own history). Red-eyes: the chain links by UTC timestamps across
+--     midnight; day position counts within the BTS service date.
+--     assert_ml_rotation_schedule_only recomputes the turnaround from silver
+--     schedule columns independently and pins it value-level over the table.
 -- Labels are prefixed label_ and are the ONLY post-departure columns.
 -- assert_ml_features_no_leakage pins this table's schema to the audited
 -- column allowlist and fails on ANY unexpected column.
@@ -144,11 +158,22 @@ joined as (
         globals.global_avg_arr_delay_minutes,
         flights.flight_date < date('{{ var("train_test_cutoff_date") }}') as is_training_row,
         {% for grain, key in [('route', 'flights.route'), ('carrier', 'flights.carrier'),
-                              ('origin', 'flights.origin'), ('dest', 'flights.dest')] %}
+                              ('origin', 'flights.origin'), ('dest', 'flights.dest'),
+                              ('turnaround_band', 'rotation.turnaround_band'),
+                              ('rotation_position', 'rotation.rotation_position_key')] %}
         {{ grain }}_rates.arr_del15_rate as {{ grain }}_rate_raw,
         {{ grain }}_rates.avg_arr_delay_minutes as {{ grain }}_avg_raw,
         {{ grain }}_rates.n_flights as {{ grain }}_n_raw,
         {% endfor %}
+        rotation.rotation_position,
+        rotation.legs_today,
+        rotation.origin_dep_density_hour,
+        rotation.has_inbound_leg,
+        rotation.sched_turnaround_min,
+        rotation.sched_turnaround_slack_min,
+        rotation.is_tight_turnaround,
+        rotation.inbound_distance,
+        rotation.inbound_crs_elapsed_min,
         weather.temp_f,
         weather.dewpoint_f,
         weather.wind_speed_kn,
@@ -175,6 +200,23 @@ joined as (
         on origin_rates.entity_level = 'airport' and origin_rates.entity_key = flights.origin
     left join rates as dest_rates
         on dest_rates.entity_level = 'airport' and dest_rates.entity_key = flights.dest
+    -- SCHEDULE-ONLY rotation attributes (shared model; see header cascade
+    -- bullet — prior-leg ACTUALS never enter)
+    left join {{ ref('int_aircraft_rotation') }} as rotation
+        on rotation.flight_date = flights.flight_date
+        and rotation.carrier = flights.carrier
+        -- IS NOT DISTINCT FROM: flight_number is the one nullable natural-key
+        -- column (1 NULL leg in 20.2M) — an equality join silently drops it
+        and rotation.flight_number is not distinct from flights.flight_number
+        and rotation.origin = flights.origin
+        and rotation.dest = flights.dest
+        and rotation.crs_dep_time = flights.crs_dep_time
+    left join rates as turnaround_band_rates
+        on turnaround_band_rates.entity_level = 'turnaround_band'
+        and turnaround_band_rates.entity_key = rotation.turnaround_band
+    left join rates as rotation_position_rates
+        on rotation_position_rates.entity_level = 'rotation_position'
+        and rotation_position_rates.entity_key = rotation.rotation_position_key
     -- AT-OR-BEFORE hourly join (leakage boundary): the LAST ISD observation
     -- at or before SCHEDULED departure, never after it, bounded by the
     -- 3-hour staleness ceiling. Pinned at the value level by
@@ -241,7 +283,8 @@ select
     -- that handicapped the booster — never inflated metrics) -> v3 (this)
     -- history. NULL stays NULL for entities absent from the training window.
     {% set m = var('hist_smoothing_prior_strength') %}
-    {% for grain in ['route', 'carrier', 'origin', 'dest'] %}
+    {% for grain in ['route', 'carrier', 'origin', 'dest',
+                     'turnaround_band', 'rotation_position'] %}
     ({{ grain }}_n_raw * {{ grain }}_rate_raw + {{ m }} * global_arr_del15_rate)
         / ({{ grain }}_n_raw + {{ m }}) as hist_{{ grain }}_arr_del15_rate,
     ({{ grain }}_n_raw * {{ grain }}_avg_raw + {{ m }} * global_avg_arr_delay_minutes)
@@ -273,6 +316,19 @@ select
     -- of the chosen observation, kept so the standing guard can prove
     -- obs <= scheduled departure over the whole table at any time
     origin_weather_obs_ts_utc,
+
+    -- cascade / aircraft-rotation schedule features (see header: schedule
+    -- columns only; prior-leg ACTUALS never enter; NULL paths for first-leg
+    -- and unknown-tail flights ride the has_inbound_leg indicator)
+    rotation_position,
+    legs_today,
+    origin_dep_density_hour,
+    has_inbound_leg,
+    sched_turnaround_min,
+    sched_turnaround_slack_min,
+    is_tight_turnaround,
+    inbound_distance,
+    inbound_crs_elapsed_min,
 
     -- holiday flags (generated calendar, knowable years ahead)
     is_holiday,

@@ -65,7 +65,8 @@ def load_mart() -> tuple[pd.DataFrame, bigquery.Client, str]:
     # tested-unique grain makes the frame canonical regardless of read order,
     # so training is DETERMINISTIC — verified ACROSS a full mart rebuild:
     # a dbt rebuild of ml_flight_features followed by retraining reproduced
-    # the headline bit-identically (ROC 0.6806027430 / PR 0.3478668781).
+    # the headline bit-identically — re-verified for every feature
+    # generation; the current pinned values live in ml/README.md.
     # The residual caveat is now empirical-only: BigQuery's distributed
     # float aggregation order reproduced last bits in the observed rebuild,
     # but that stability is an observation, not a BigQuery contract.

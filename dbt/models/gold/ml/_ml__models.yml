@@ -14,8 +14,13 @@ models:
       scheduled departure within a 3-hour staleness ceiling, UTC obs joined
       to local schedule via the seed tz; pinned at the value level by
       assert_ml_weather_obs_before_departure, has_origin_weather =
-      in-window observation exists), and holiday flags. Labels carry the
-      label_ prefix and are the only
+      in-window observation exists), cascade/aircraft-rotation SCHEDULE
+      features (turnaround, rotation position, inbound-leg schedule, origin
+      departure density — the prior leg's ACTUAL arrival delay is never an
+      input; leak-free substitute = hist_turnaround_band_* /
+      hist_rotation_position_* training-window tendencies; pinned
+      value-level by assert_ml_rotation_schedule_only), and holiday flags.
+      Labels carry the label_ prefix and are the only
       post-departure columns; assert_ml_features_no_leakage pins the schema
       to the audited column allowlist. Split on is_training_row (or
       flight_date) — never randomly; anyone carving a validation slice from

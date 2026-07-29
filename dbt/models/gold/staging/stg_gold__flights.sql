@@ -20,6 +20,7 @@ select
     dot_id_reporting_airline,
     iata_code_reporting_airline,
     flight_number_reporting_airline as flight_number,
+    tail_number,  -- links an aircraft's legs for rotation features
     origin,
     origin_tz,  -- IANA tz from the airports seed: local schedule -> UTC joins
     dest,
