@@ -38,7 +38,9 @@ NUMERIC_FEATURES = [
     "hist_dest_n_flights",
     # cascade grains: the leak-free substitute for actual inbound delay —
     # TRAINING-WINDOW tendency of a scheduled-rotation profile to run late,
-    # smoothed like every hist_* grain; band keys never NULL
+    # smoothed like every hist_* grain. TAIL-SWAP RESTRICTION (2026-07):
+    # NULL on swap-shaped linkages (4.12% of rows) — the operated-tail chain
+    # is only a feature where it is schedule-consistent
     "hist_turnaround_band_arr_del15_rate",
     "hist_turnaround_band_avg_arr_delay_minutes",
     "hist_turnaround_band_n_flights",
@@ -64,7 +66,9 @@ NUMERIC_FEATURES = [
     "has_origin_weather",
     # cascade / aircraft-rotation SCHEDULE features (knowable at booking):
     # the prior leg's ACTUAL arrival delay is post-departure information for
-    # this flight and is never an input — see FORBIDDEN_FEATURES
+    # this flight and is never an input — see FORBIDDEN_FEATURES. NULL on
+    # swap-shaped linkages (the tail-swap restriction) — except
+    # origin_dep_density_hour, a schedule aggregate kept for every row
     "rotation_position",
     "legs_today",
     "origin_dep_density_hour",

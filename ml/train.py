@@ -89,9 +89,11 @@ def build_logreg_pipeline(max_iter: int) -> Pipeline:
 
     Origin/dest/route identities are deliberately not one-hot here (7.6k+
     columns); their signal reaches the linear model through the hist_* rates.
-    New-route TEST rows (NULL hist) impute to the train median — the linear
-    baseline has no missingness signal by construction, because hist_* is
-    never NULL on a training row. keep_empty_features guards the
+    NULL hist values impute to the train median — new-route TEST rows for
+    the entity grains, and (since the tail-swap restriction) the ~4.12% of
+    rows on swap-shaped linkages whose rotation-hist columns are NULL in
+    train and test alike; the linear model sees the median there, not a
+    missingness signal. keep_empty_features guards the
     all-null-in-training edge (imputes 0, inert after scaling); unseen future
     carriers encode to all-zeros (handle_unknown='ignore').
 
