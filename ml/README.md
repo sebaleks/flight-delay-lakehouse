@@ -109,21 +109,44 @@ OBSERVED hourly reading at or before the scheduled departure hour; serving
 fetches the NDFD forecast valid AT that same hour (api.weather.gov:
 official, keyless, covers the whole BTS territory).
 
-**Train/serve mismatch, stated honestly — now ONE gap:** training and
-serving reference the SAME instant, the scheduled departure hour, so the
-daily-weather era's prior-day-vs-flight-day time misalignment is gone. What
-remains is forecast-vs-observed error (training features are observations;
-serving features are forecasts of them, incl. a documented QPF-per-hour
-apportionment when NDFD issues multi-hour precip intervals). It does NOT
-change the held-out test metrics (observed data throughout); it makes the
-model usable on flights that have not happened yet. Missing forecast
-coverage (beyond the ~7-day horizon, off-grid points) reproduces the
-training NULL path exactly: weather NaN + `has_origin_weather=false`.
+**Train/serve mismatch, stated honestly — TWO gaps, both a consequence of
+scoring flights that have not happened yet.** Training and serving reference
+the SAME instant, the scheduled departure hour, so the daily-weather era's
+prior-day-vs-flight-day time misalignment is gone. What remains:
+
+1. **Weather is forecast-vs-observed.** Training features are OBSERVATIONS;
+   serving features are NDFD FORECASTS of those same quantities (incl. a
+   documented QPF-per-hour apportionment when NDFD issues multi-hour precip
+   intervals). Missing forecast coverage (beyond the ~7-day horizon, off-grid
+   points) reproduces the training NULL path exactly: weather NaN +
+   `has_origin_weather=false`.
+2. **Rotation context depends on what the caller knows.** The 15
+   cascade/rotation features are SCHEDULE-derived (knowable at booking). A
+   caller with the aircraft's planned rotation passes it per request; the demo
+   passes its proxy schedule's historical rotation. A caller WITHOUT it takes
+   the **typical rotation profile** (training medians), and origin departure
+   density falls back to the training `(origin, hour, weekday)` median. Why
+   estimate rather than NULL: under the tail-swap restriction an all-NULL
+   rotation is in-distribution but MEANS "operated linkage was
+   swap-restructured", so nulling a merely-unknown future plan would
+   misclassify it as swap-shaped. The rotation block is **complete-or-absent**:
+   once `rotation_position` is given, `legs_today` is required and (for
+   `position >= 2`) the inbound leg is too — a partial context is rejected
+   (422) rather than assembled into a shape training never produced. Each
+   response reports its estimation honestly: `rotation_context` is `"provided"`
+   (the caller supplied the whole rotation linkage) or `"typical_estimate"`
+   (the median profile), and `origin_density_source` is `"provided"` or
+   `"estimated"` for the separately-optional departure-density feature.
+
+Neither gap changes the held-out test metrics — those were computed entirely
+on observed data and stand as reported (ROC 0.7389 / PR-AUC 0.4652); they are
+the price of usability on flights that have not departed.
 
 Serving-time feature parity: hist_* rates are read from `ml_flight_features`
 itself (constant within an entity — byte-exact training values; new entities
-stay NaN), holiday flags use the same `holidays` library, and the assembled
-frame is asserted against the models' stored schemas before any prediction.
-Note on outputs: with `scale_pos_weight` ≈ 3.75 the classifier's
+stay NaN), the turnaround-band and rotation-position hist values come straight
+from the mart the same way, holiday flags use the same `holidays` library, and
+the assembled frame is asserted against the models' stored schemas before any
+prediction. Note on outputs: with `scale_pos_weight` ≈ 3.75 the classifier's
 probabilities are recall-weighted (systematically higher than raw delay
 frequencies) — treat them as a ranking score, not a calibrated frequency.

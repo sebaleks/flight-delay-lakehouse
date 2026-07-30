@@ -96,6 +96,13 @@ class FlightRequest:
     # its proxy schedule's historical rotation. Callers WITHOUT the context
     # get the TYPICAL rotation profile (training medians) — flagged in the
     # response as an estimate; see _load_rotation_hist for why not NULL.
+    # The FastAPI FlightIn model enforces this as COMPLETE-or-absent (once
+    # rotation_position is given, legs_today is required and — for position >= 2
+    # — the inbound triple too), and rotation_context="provided" reports that
+    # guarantee. A hand-built FlightRequest bypasses that validation: assembly
+    # still degrades to a coherent vector (legs floored at the position, missing
+    # attributes filled from the typical profile), but such a partial request
+    # should honor the same completeness for the response flag to be meaningful.
     rotation_position: int | None = None
     legs_today: int | None = None
     sched_turnaround_min: float | None = None
@@ -285,6 +292,16 @@ def _load_rotation_hist(ctx: ServingContext) -> dict:
     return out
 
 
+def _needs_density_estimate(v: float | None) -> bool:
+    """A caller-supplied origin_dep_density_hour is usable only when finite and
+    positive — training density is never NULL and is >= 1 by definition. Any
+    other value (None, NaN, inf, <= 0) must fall back to the (origin, hour,
+    weekday) estimate, never assemble NaN. Used at BOTH the key-collection and
+    the lookup site so the two predicates can never drift (a value gated out at
+    lookup but not collected as a key would silently become NaN)."""
+    return not (v is not None and math.isfinite(v) and v > 0)
+
+
 def _density_estimates(ctx: ServingContext, keys: list[tuple[str, int, int]]) -> dict:
     """Serve-time ESTIMATE of origin_dep_density_hour: the TRAINING-window
     median over distinct schedule-hours (not flight rows — a flight-row
@@ -333,12 +350,25 @@ def _rotation_features(fl: FlightRequest, ctx: ServingContext, density: float) -
     typ = ctx.rotation_hist.get("typical", {})
     if has_context:
         pos = float(fl.rotation_position)
-        legs = float(fl.legs_today) if fl.legs_today is not None else typ.get("legs", math.nan)
+        # legs_today >= rotation_position in every training row (COUNT(*) vs
+        # ROW_NUMBER over the same tail/flight_date partition). The API enforces
+        # this (422 on legs_today < rotation_position or on a missing
+        # legs_today); serving FLOORS at the position on EVERY branch so a direct
+        # dataclass caller (bypassing pydantic) can never assemble the
+        # legs_today < rotation_position shape training never produces — one that
+        # omits legs_today degrades to the typical median, one that supplies a
+        # value below the position is clamped up to it.
+        legs = (
+            max(float(fl.legs_today), pos)
+            if fl.legs_today is not None
+            else max(typ.get("legs", pos), pos)
+        )
         t = fl.sched_turnaround_min
         has_inbound = t is not None and math.isfinite(t) and 0 <= t <= 840
-        # all-or-nothing inbound (the API 422s partial context; direct
-        # constructors degrade to typical values): has_inbound rows in
-        # training ALWAYS carry inbound distance/duration — never NaN them
+        # all-or-nothing inbound (the API enforces complete-or-absent context,
+        # and requires the inbound triple for position >= 2; direct dataclass
+        # constructors degrade to typical values): has_inbound rows in training
+        # ALWAYS carry inbound distance/duration — never NaN them
         dist = fl.inbound_distance if fl.inbound_distance is not None else typ.get("dist")
         elapsed = (
             fl.inbound_crs_elapsed_min
@@ -488,7 +518,7 @@ def assemble_features(ctx: ServingContext, flights: list[FlightRequest]) -> pd.D
         {
             (fl.origin, int(fl.dep_time.split(":")[0]), fl.flight_date.isoweekday())
             for fl in flights
-            if fl.origin_dep_density_hour is None
+            if _needs_density_estimate(fl.origin_dep_density_hour)
         }
     )
     densities = _density_estimates(ctx, density_keys) if density_keys else {}
@@ -530,14 +560,12 @@ def assemble_features(ctx: ServingContext, flights: list[FlightRequest]) -> pd.D
         row.update(_origin_weather(ctx, fl.origin, fl.flight_date, fl.dep_time))
         row.update(_holiday_flags(fl.flight_date))
         density = (
-            float(fl.origin_dep_density_hour)
-            if fl.origin_dep_density_hour is not None
-            and math.isfinite(fl.origin_dep_density_hour)
-            and fl.origin_dep_density_hour > 0
-            else densities.get(
+            densities.get(
                 (fl.origin, int(fl.dep_time.split(":")[0]), fl.flight_date.isoweekday()),
                 math.nan,
             )
+            if _needs_density_estimate(fl.origin_dep_density_hour)
+            else float(fl.origin_dep_density_hour)
         )
         row.update(_rotation_features(fl, ctx, density))
         rows.append(row)
@@ -599,8 +627,19 @@ def predict(ctx: ServingContext, flights: list[FlightRequest]) -> list[dict]:
                 "expected_delay_minutes": round(float(minutes[i]), 1),
                 "logreg_baseline_probability": round(float(p_logreg[i]), 4),
                 "has_origin_weather": bool(x["has_origin_weather"].iloc[i] == 1.0),
+                # whether the rotation LINKAGE (position/legs/inbound) was
+                # caller-provided or the typical-median estimate. The API
+                # enforces complete-or-absent, so "provided" means the whole
+                # linkage came from the caller. Density is reported separately
+                # (origin_density_source) because it is an independently
+                # optional feature, estimated when omitted in BOTH modes.
                 "rotation_context": (
                     "provided" if fl.rotation_position is not None else "typical_estimate"
+                ),
+                "origin_density_source": (
+                    "estimated"
+                    if _needs_density_estimate(fl.origin_dep_density_hour)
+                    else "provided"
                 ),
                 # pd.isna, not isinstance(float): numeric columns hold
                 # np.float32, which is NOT a Python float — the old check
