@@ -194,12 +194,14 @@ def build_calibration(
     raw_test: np.ndarray,
     y_test: np.ndarray,
     val_window: tuple[str, str],
+    method: str = SERVING_METHOD,
 ) -> tuple[Calibrator, dict]:
     """Fit the calibrator on the validation slice, evaluate raw / Platt /
-    isotonic on the held-out TEST set, and HARD-GATE that the serving map
-    (Platt) preserves ROC and PR-AUC. The test set is READ for reporting and
-    the gate only — never fit on. Returns (calibrator, report)."""
-    cal = fit_calibrator(p_val, y_val, val_window)
+    isotonic on the held-out TEST set, and HARD-GATE that the ACTUAL serving
+    map (``method`` — whatever ``ml.serving`` applies) preserves ROC and PR-AUC.
+    The test set is READ for reporting and the gate only — never fit on.
+    Returns (calibrator, report)."""
+    cal = fit_calibrator(p_val, y_val, val_window, method=method)
 
     raw_m = calibration_metrics(y_test, raw_test)
     platt_test = cal.transform(raw_test, method="platt")
@@ -208,11 +210,18 @@ def build_calibration(
     iso_m = calibration_metrics(y_test, iso_test)
 
     # THE INVARIANT: calibration is a monotonic remap, so the SERVING map must
-    # leave ROC/PR-AUC bit-unchanged. A move beyond float roundoff means the
-    # map is non-monotonic, or the fit leaked, or the base scores were
-    # retrained — fail loudly rather than ship a silently-degraded ranking.
-    roc_delta = abs(platt_m["roc_auc"] - raw_m["roc_auc"])
-    pr_delta = abs(platt_m["pr_auc"] - raw_m["pr_auc"])
+    # leave ROC/PR-AUC bit-unchanged. Gate the map serving ACTUALLY applies —
+    # cal.transform(raw_test) dispatches on cal.method, the exact call
+    # ml.serving.predict makes — NOT a hardcoded method, so the guarantee
+    # protects whatever ships. With Platt active this equals platt_m (Δ=0); if
+    # the serving method were isotonic, its tie-induced PR-AUC move (~3e-3)
+    # would trip this gate instead of being silently validated as Platt. A move
+    # beyond float roundoff means the map is non-monotonic, or the fit leaked,
+    # or the base scores were retrained — fail loudly rather than ship a
+    # silently-degraded ranking.
+    served_m = calibration_metrics(y_test, cal.transform(raw_test))
+    roc_delta = abs(served_m["roc_auc"] - raw_m["roc_auc"])
+    pr_delta = abs(served_m["pr_auc"] - raw_m["pr_auc"])
     if roc_delta > AUC_PRESERVE_TOL or pr_delta > AUC_PRESERVE_TOL:
         raise CalibrationError(
             f"serving calibrator ({cal.method}) moved AUC beyond tol "
@@ -226,6 +235,8 @@ def build_calibration(
         "n_val": cal.n_val,
         "platt_params": {"a": cal.platt_a, "b": cal.platt_b},
         "auc_preserved": {
+            # deltas are for the SERVING map (cal.method), not a fixed method
+            "method": cal.method,
             "roc_delta": roc_delta,
             "pr_delta": pr_delta,
             "tol": AUC_PRESERVE_TOL,
