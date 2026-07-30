@@ -30,10 +30,12 @@ design removes the channel by construction.
 
 | Module        | Responsibility                                              |
 |---------------|-------------------------------------------------------------|
-| `features.py` | Canonical feature registry + forbidden-column mirror         |
-| `audit.py`    | Pre-training leakage self-audit (hard gate; also standalone) |
-| `data.py`     | Load the mart from BigQuery (ADC), typed, canonically sorted |
-| `train.py`    | Split, fit both models, evaluate on held-out rows, artifacts |
+| `features.py`    | Canonical feature registry + forbidden-column mirror         |
+| `audit.py`       | Pre-training leakage self-audit (hard gate; also standalone) |
+| `data.py`        | Load the mart from BigQuery (ADC), typed, canonically sorted |
+| `tuning.py`      | Stage 3 hyperparameter search (reproducible; regressor tuned) |
+| `train.py`       | Split, fit both models, evaluate on held-out rows, artifacts |
+| `calibration.py` | Stage 4 probability calibration of the classifier (Platt map) |
 
 ## Headline (cascade/rotation RESTRICTED + hourly weather, held-out Jul–Dec 2024)
 
@@ -92,6 +94,40 @@ hist_* residual is accepted deliberately: it is common-mode across candidates
 (does not distort the relative ranking) and the reported deltas are on the
 leak-free test set. Both models retrain bit-identically (the regressor pins
 `random_state`; the classifier's `subsample=1` default is unchanged).
+
+**Stage 4 — probability calibration (classifier).** `scale_pos_weight` ≈ 3.75
+buys recall on the ~1-in-5 positive rate but inflates the raw scores: they
+*rank* well yet are not frequencies (raw test **ECE 0.227** — a flight scored
+0.25 is delayed ~9% of the time). `ml/calibration.py` remaps them with a
+monotonic calibrator fit on the **same 8-week validation slice** as Stage 3
+(`2024-05-06..2024-06-30`, never the test set), leaving the model untouched.
+Two maps are fit and both persisted; **serving ships Platt**, isotonic is kept
+for offline analysis only:
+
+| Test set | Brier | ECE | ROC-AUC Δ | PR-AUC Δ |
+|---|---|---|---|---|
+| raw | 0.19147 | 0.22689 | — | — |
+| **Platt (shipped)** | **0.13513** | **0.01658** | **0 (exact)** | **0 (exact)** |
+| isotonic (offline) | 0.13519 | 0.01967 | −3.3e-5 | −3.1e-3 |
+
+**The invariant (hard-gated).** Calibration is a monotonic remap, so ROC/PR-AUC
+must be unchanged. Platt is a strictly-monotonic sigmoid → it preserves the
+complete ordering, so on the held-out test ROC and PR-AUC are **bit-unchanged**
+(`Δ = 0`); `build_calibration` **fails the training run** if the served map
+moves ROC or PR-AUC beyond `1e-6`. Isotonic is a step function whose ties
+coarsen the ranking — harmless to ROC (−3.3e-5) but it moves `average_precision`
+by −0.0031, which is exactly why it is **not** the serving map. Platt also wins
+on Brier and ECE here (it transfers better across
+the val→test base-rate gap, 0.260 → 0.197), so shipping the AUC-safe map costs
+nothing. In-sample optimism from fitting on the (in-sample) validation slice
+was measured against an out-of-sample fit and is negligible (test Brier 6e-5 /
+ECE 5e-3). The calibrator fit is deterministic, so `metrics.json` and
+`calibrator.joblib` stay bit-identical across rebuilds like the rest of the run.
+
+**TreeSHAP / margin attribution note:** SHAP explains the **raw XGBoost margin**
+(log-odds), which is upstream of the calibration map — SHAP values do not sum
+to the calibrated `delay_probability`. Attribute the margin; read the
+calibrated probability as the reported output.
 
 **Morning vs evening (lift over prevalence, XGB), across generations:**
 
@@ -198,6 +234,9 @@ itself (constant within an entity — byte-exact training values; new entities
 stay NaN), the turnaround-band and rotation-position hist values come straight
 from the mart the same way, holiday flags use the same `holidays` library, and
 the assembled frame is asserted against the models' stored schemas before any
-prediction. Note on outputs: with `scale_pos_weight` ≈ 3.75 the classifier's
-probabilities are recall-weighted (systematically higher than raw delay
-frequencies) — treat them as a ranking score, not a calibrated frequency.
+prediction. **Output note:** `delay_probability` is **Platt-calibrated**
+(Stage 4) — a delay frequency, not the raw recall-inflated score; each response
+echoes `probability_calibration: "platt"`. Calibration is monotonic, so the
+ranking is unchanged (ROC 0.7389 / PR-AUC 0.4652) while the served probability
+is trustworthy (held-out ECE 0.017). `logreg_baseline_probability` stays
+uncalibrated — a comparison anchor, not a shipped output.

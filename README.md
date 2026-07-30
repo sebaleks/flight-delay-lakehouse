@@ -136,7 +136,9 @@ uv run dbt debug --project-dir dbt      # verifies BigQuery + ADC connectivity
 - [x] Feature gen 2: hourly ISD weather at the scheduled departure hour
 - [x] Feature gen 3: cascade/aircraft-rotation (tail-swap-restricted; see above)
 - [x] Forecast inference endpoint (FastAPI + NWS/NDFD at the departure hour)
-- [ ] Hyperparameter tuning (Stage 3), probability calibration (Stage 4), blog
+- [x] Hyperparameter tuning (Stage 3: regressor tuned; classifier kept defaults)
+- [x] Probability calibration (Stage 4: Platt-calibrated classifier, AUC preserved)
+- [ ] Blog writeup
 
 The full pipeline runs end-to-end under Dagster. Open PRs at any time are
 listed on GitHub; the model headline above is the tail-swap-restricted number.

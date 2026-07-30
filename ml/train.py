@@ -46,7 +46,9 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 from ml import features as f
 from ml.audit import run_audit
+from ml.calibration import build_calibration
 from ml.data import load_mart
+from ml.tuning import carve
 
 log = logging.getLogger("ml.train")
 
@@ -256,6 +258,34 @@ def run_training(xgb_rounds: int = 300, logreg_max_iter: int = 200) -> dict:
     clf.fit(x_xgb[train_mask], y_clf[train_mask])
     clf_scores = clf.predict_proba(x_xgb[test_mask])[:, 1]
     results["xgb_classifier"] = classification_metrics(y_clf[test_mask], clf_scores)
+
+    # ---- probability calibration (Stage 4; see ml/calibration.py) ----
+    # scale_pos_weight makes the raw scores rank-useful but overconfident as
+    # frequencies; a monotonic map fixes that WITHOUT retraining. Fit on the
+    # time-based VALIDATION slice (the last 8 weeks of the training window — the
+    # same carve ml.tuning uses), NEVER on the held-out test. The shipped map
+    # (Platt) is HARD-GATED inside build_calibration to preserve ROC/PR-AUC, so
+    # the classifier headline (0.7389 / 0.4652) is untouched; isotonic is fit
+    # and reported for the record but not the serving map (its ties move PR-AUC).
+    _, _, val_mask, _ = carve(df)
+    val_window = (
+        str(df.loc[val_mask, "flight_date"].min().date()),
+        str(df.loc[val_mask, "flight_date"].max().date()),
+    )
+    p_val = clf.predict_proba(x_xgb[val_mask])[:, 1]
+    calibrator, results["calibration"] = build_calibration(
+        p_val, y_clf[val_mask], clf_scores, y_clf[test_mask], val_window
+    )
+    _cal_test = results["calibration"]["test"]
+    log.info(
+        "calibration (%s): test brier %.5f->%.5f, ece %.5f->%.5f (roc/pr preserved)",
+        calibrator.method,
+        _cal_test["raw"]["brier"],
+        _cal_test["platt"]["brier"],
+        _cal_test["raw"]["ece"],
+        _cal_test["platt"]["ece"],
+    )
+
     imp = pd.Series(clf.get_booster().get_score(importance_type="gain")).sort_values(
         ascending=False
     )
@@ -333,6 +363,10 @@ def run_training(xgb_rounds: int = 300, logreg_max_iter: int = 200) -> dict:
     reg.save_model(run_dir / "xgb_regressor.ubj")
     # the WHOLE fitted pipeline (preprocessing + estimator) is the artifact
     joblib.dump(logreg, run_dir / "logreg_pipeline.joblib")
+    # the probability calibrator (Platt serving map + isotonic for offline
+    # analysis) as a pure-numpy container; serving applies it to the raw
+    # classifier probability — see ml/serving.py predict
+    joblib.dump(calibrator, run_dir / "calibrator.joblib")
     (run_dir / "metrics.json").write_text(json.dumps(results, indent=2, default=str))
     # added to the RETURNED dict only, after the file write, so metrics.json
     # stays byte-comparable across runs on a fixed mart

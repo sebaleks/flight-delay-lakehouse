@@ -116,6 +116,10 @@ class Models:
     clf: xgb.XGBClassifier
     reg: xgb.XGBRegressor
     logreg: object
+    # probability calibrator (ml.calibration.Calibrator): the Platt map that
+    # turns the classifier's raw, recall-inflated scores into calibrated
+    # frequencies. Strictly monotonic -> leaves ranking (ROC/PR-AUC) unchanged.
+    calibrator: object
     artifacts_dir: Path
 
 
@@ -144,10 +148,15 @@ def load_models(artifacts_dir: Path | None = None) -> Models:
     if artifacts_dir is None:
         if not ARTIFACT_ROOT.is_dir():
             raise FileNotFoundError(f"artifact root {ARTIFACT_ROOT} does not exist — train first")
-        # only COMPLETE runs are candidates — all three artifacts, the same
+        # only COMPLETE runs are candidates — all FOUR artifacts, the same
         # contract training writes: a run interrupted between saves must not
         # win selection and crash startup with a confusing load error
-        required = ("xgb_classifier.ubj", "xgb_regressor.ubj", "logreg_pipeline.joblib")
+        required = (
+            "xgb_classifier.ubj",
+            "xgb_regressor.ubj",
+            "logreg_pipeline.joblib",
+            "calibrator.joblib",
+        )
         runs = sorted(
             d
             for d in ARTIFACT_ROOT.iterdir()
@@ -161,6 +170,7 @@ def load_models(artifacts_dir: Path | None = None) -> Models:
     reg = xgb.XGBRegressor()
     reg.load_model(artifacts_dir / "xgb_regressor.ubj")
     logreg = joblib.load(artifacts_dir / "logreg_pipeline.joblib")
+    calibrator = joblib.load(artifacts_dir / "calibrator.joblib")
 
     for name, booster in (("classifier", clf), ("regressor", reg)):
         stored = booster.get_booster().feature_names
@@ -175,7 +185,9 @@ def load_models(artifacts_dir: Path | None = None) -> Models:
             f"logreg pipeline schema != LOGREG_INPUT_COLUMNS; stored={logreg_cols}"
         )
     log.info("artifacts loaded from %s; schemas verified", artifacts_dir.name)
-    return Models(clf=clf, reg=reg, logreg=logreg, artifacts_dir=artifacts_dir)
+    return Models(
+        clf=clf, reg=reg, logreg=logreg, calibrator=calibrator, artifacts_dir=artifacts_dir
+    )
 
 
 def build_context(artifacts_dir: Path | None = None) -> ServingContext:
@@ -615,7 +627,13 @@ def predict(ctx: ServingContext, flights: list[FlightRequest]) -> list[dict]:
     if not flights:
         return []
     x = assemble_features(ctx, flights)
+    # RAW classifier scores are recall-inflated by scale_pos_weight; the
+    # calibrator (Platt, strictly monotonic) remaps them onto the frequency
+    # scale WITHOUT changing their order — so delay_probability is a calibrated
+    # probability while ranking-based metrics are unchanged. TreeSHAP/margin
+    # attribution explains the RAW margin upstream of this map, not p_cal.
     p_xgb = ctx.models.clf.predict_proba(x)[:, 1]
+    p_cal = ctx.models.calibrator.transform(p_xgb)
     minutes = ctx.models.reg.predict(x)
     p_logreg = ctx.models.logreg.predict_proba(x[LOGREG_INPUT_COLUMNS])[:, 1]
     out = []
@@ -623,7 +641,12 @@ def predict(ctx: ServingContext, flights: list[FlightRequest]) -> list[dict]:
         out.append(
             {
                 "flight": f"{fl.carrier} {fl.origin}->{fl.dest} {fl.flight_date} {fl.dep_time}",
-                "delay_probability": round(float(p_xgb[i]), 4),
+                # CALIBRATED probability (Platt) — a delay FREQUENCY, not the
+                # raw recall-inflated score; calibration method reported for
+                # transparency. The logreg baseline stays raw (a comparison
+                # anchor, itself class_weight-balanced and uncalibrated).
+                "delay_probability": round(float(p_cal[i]), 4),
+                "probability_calibration": ctx.models.calibrator.method,
                 "expected_delay_minutes": round(float(minutes[i]), 1),
                 "logreg_baseline_probability": round(float(p_logreg[i]), 4),
                 "has_origin_weather": bool(x["has_origin_weather"].iloc[i] == 1.0),
