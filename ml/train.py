@@ -52,6 +52,38 @@ log = logging.getLogger("ml.train")
 
 ARTIFACT_ROOT = Path(__file__).resolve().parent / "artifacts"
 
+# XGBoost hyperparameters (Stage 3 tuning — feat/hyperparameter-tuning). A
+# time-based validation slice (the last 8 weeks of the training window,
+# 2024-05-06..2024-06-30) selected params PER MODEL over a curated candidate
+# grid with early stopping; the winners were retrained on the full training
+# window and judged ONLY on the untouched held-out test set. The reproducible
+# search and the full candidate table live in ml/tuning.py.
+#
+# CLASSIFIER — keeps the project defaults. The validation search's top
+# candidate (depth 12 / lr 0.04 / heavy regularization) won on validation by
+# +0.0025 PR-AUC but REGRESSED on held-out test (ROC 0.7389->0.7373, PR-AUC
+# 0.4652->0.4646): validation-optimism from the summer val-slice distribution
+# and the documented full-window hist_* residual, not signal. We do not
+# re-select against the test set — the default depth-8 / lr-0.1 / 300-round
+# config is at its plateau and stays the shipped classifier (0.7389 / 0.4652).
+#
+# REGRESSOR — adopts the tuned config. The same candidate improved the
+# regressor on BOTH validation (RMSE 58.30->57.97) and held-out test (RMSE
+# 49.71->49.26, MAE 19.10->18.99); agreement across the boundary makes it
+# signal, not luck. subsample / colsample_bytree < 1 draw from XGBoost's RNG,
+# so random_state is pinned for bit-identical determinism (the classifier's
+# subsample=1 default draws no RNG and needs no seed — its config is unchanged).
+CLASSIFIER_PARAMS = dict(learning_rate=0.1, max_depth=8)  # n_estimators via xgb_rounds
+REGRESSOR_PARAMS = dict(
+    n_estimators=201,
+    learning_rate=0.04,
+    max_depth=12,
+    min_child_weight=20,
+    subsample=0.7,
+    colsample_bytree=0.7,
+    random_state=0,
+)
+
 
 def split_report(df: pd.DataFrame) -> dict:
     """Split strictly on is_training_row; prove the partition is clean."""
@@ -145,7 +177,11 @@ def classification_metrics(y_true, scores, threshold=0.5) -> dict:
 def run_training(xgb_rounds: int = 300, logreg_max_iter: int = 200) -> dict:
     """The real training path (also wrapped by orchestration): audit gate,
     is_training_row split, canonical-sorted load, self-contained artifacts.
-    Returns the results dict (metrics, baselines, split, artifacts_dir)."""
+    Returns the results dict (metrics, baselines, split, artifacts_dir).
+
+    ``xgb_rounds`` is the CLASSIFIER's n_estimators (default 300, its tuned-
+    confirmed value); the REGRESSOR's rounds are fixed in REGRESSOR_PARAMS
+    (Stage 3 tuning). See the CLASSIFIER_PARAMS / REGRESSOR_PARAMS note."""
     t0 = time.time()
     df, bq, dataset = load_mart()
 
@@ -210,8 +246,7 @@ def run_training(xgb_rounds: int = 300, logreg_max_iter: int = 200) -> dict:
     x_xgb = xgb_frame(df)
     clf = xgb.XGBClassifier(
         n_estimators=xgb_rounds,
-        learning_rate=0.1,
-        max_depth=8,
+        **CLASSIFIER_PARAMS,
         tree_method="hist",
         enable_categorical=True,
         scale_pos_weight=spw,
@@ -251,12 +286,10 @@ def run_training(xgb_rounds: int = 300, logreg_max_iter: int = 200) -> dict:
     results["xgb_classifier_slices"] = slices
     del clf_scores
 
-    # ---- XGBoost regressor ----
-    log.info("fitting xgboost regressor ...")
+    # ---- XGBoost regressor (Stage 3 tuned config; see REGRESSOR_PARAMS) ----
+    log.info("fitting xgboost regressor (tuned: %s) ...", REGRESSOR_PARAMS)
     reg = xgb.XGBRegressor(
-        n_estimators=xgb_rounds,
-        learning_rate=0.1,
-        max_depth=8,
+        **REGRESSOR_PARAMS,
         tree_method="hist",
         enable_categorical=True,
         n_jobs=-1,
@@ -317,7 +350,13 @@ def main() -> None:
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--xgb-rounds", type=int, default=300)
+    parser.add_argument(
+        "--xgb-rounds",
+        type=int,
+        default=300,
+        help="classifier n_estimators (default 300); the regressor's rounds are "
+        "fixed by Stage 3 tuning in REGRESSOR_PARAMS",
+    )
     parser.add_argument("--logreg-max-iter", type=int, default=200)
     args = parser.parse_args()
     run_training(args.xgb_rounds, args.logreg_max_iter)
