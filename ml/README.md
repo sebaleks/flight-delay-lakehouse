@@ -79,7 +79,8 @@ feature set, a time-based validation search — the last 8 weeks of the training
 window (2024-05-06..2024-06-30), never the test set; reproducible in
 `ml/tuning.py` — then tuned the two models independently over a curated grid
 with early stopping. The **regressor adopts the tuned config** (`max_depth 12,
-lr 0.04, min_child_weight 20, subsample 0.7, colsample_bytree 0.7`): RMSE
+lr 0.04, min_child_weight 20, subsample 0.7, colsample_bytree 0.7`, 201 trees):
+RMSE
 **49.71 → 49.26**, MAE **19.10 → 18.99** on the same held-out test — the shipped
 regressor headline. The **classifier keeps its defaults**: the same candidate
 won on validation (+0.0025 PR-AUC) but REGRESSED on the held-out test

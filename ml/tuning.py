@@ -107,10 +107,16 @@ def carve(df):
     val = train & (fdate >= np.datetime64(VAL_START))
     fit = train & (fdate < np.datetime64(VAL_START))
     test = ~train
-    assert (
-        str(df.loc[fit, "flight_date"].max().date())
-        < str(df.loc[val, "flight_date"].min().date())
-        < str(df.loc[test, "flight_date"].min().date())
+    # strict temporal ordering: fit precedes val, AND the whole training window
+    # (fit + val) precedes test — the same invariant ml.train.split_report pins.
+    # Checking train.max (not just val.min) closes the drift hole: a test-window
+    # date wrongly marked is_training_row lands in val (date >= VAL_START) and
+    # would otherwise pass a val.min-only check; here it trips val.max/train.max.
+    assert str(df.loc[fit, "flight_date"].max().date()) < str(
+        df.loc[val, "flight_date"].min().date()
+    )
+    assert str(df.loc[train, "flight_date"].max().date()) < str(
+        df.loc[test, "flight_date"].min().date()
     )
     return train, fit, val, test
 
@@ -218,7 +224,16 @@ def run_tuning() -> dict:
 
     out: dict = {"val_start": str(VAL_START), "candidates": CANDIDATES}
 
-    # untuned baseline reproduced in-session (the pinned headline)
+    # SELECTION runs on the validation slice ONLY. All test scoring is deferred
+    # until AFTER both winners are chosen (below), so the search structurally
+    # cannot be influenced by held-out test metrics.
+    clf_trials, best_clf = _search("clf", X, y_clf, fit_mask, val_mask, spw_fit)
+    reg_trials, best_reg = _search("reg", X, y_reg, fit_mask, val_mask, spw_fit)
+    out["search_clf"], out["best_clf"] = clf_trials, best_clf
+    out["search_reg"], out["best_reg"] = reg_trials, best_reg
+
+    # ---- selection is done; NOW touch the held-out test set for the record ----
+    # the untuned baseline (reproduces the pinned headline) ...
     out["untuned_test"] = {
         "clf": _fit_final(
             "clf",
@@ -243,13 +258,8 @@ def run_tuning() -> dict:
     }
     log.info("UNTUNED test: %s", out["untuned_test"])
 
-    clf_trials, best_clf = _search("clf", X, y_clf, fit_mask, val_mask, spw_fit)
-    reg_trials, best_reg = _search("reg", X, y_reg, fit_mask, val_mask, spw_fit)
-    out["search_clf"], out["best_clf"] = clf_trials, best_clf
-    out["search_reg"], out["best_reg"] = reg_trials, best_reg
-
-    # tuned finals on TEST — classifier for the record (adopted: default),
-    # regressor adopted
+    # ... and the tuned winners (classifier for the record — adopted: default;
+    # regressor adopted)
     out["tuned_test"] = {
         "clf": _fit_final(
             "clf",
