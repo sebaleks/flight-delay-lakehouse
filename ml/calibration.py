@@ -67,6 +67,12 @@ class CalibrationError(RuntimeError):
 
 
 def logit(p: np.ndarray) -> np.ndarray:
+    # Clip keeps the logit finite. It can in principle collapse two DISTINCT
+    # near-saturated scores (both >= 1 - _EPS) into one calibrated value — a tie
+    # absent from the raw scores that could nudge average_precision. That never
+    # occurred on the shipped run (test PR-AUC Δ = 0 exactly), and if it ever
+    # did the AUC-preservation gate in build_calibration would FAIL THE BUILD
+    # rather than ship a coarsened ranking — so do not loosen that tolerance.
     p = np.clip(np.asarray(p, dtype=float), _EPS, 1.0 - _EPS)
     return np.log(p / (1.0 - p))
 
