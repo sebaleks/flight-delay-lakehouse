@@ -66,9 +66,12 @@ ARTIFACT_ROOT = Path(__file__).resolve().parent / "artifacts"
 # candidate (depth 12 / lr 0.04 / heavy regularization) won on validation by
 # +0.0025 PR-AUC but REGRESSED on held-out test (ROC 0.7389->0.7373, PR-AUC
 # 0.4652->0.4646): validation-optimism from the summer val-slice distribution
-# and the documented full-window hist_* residual, not signal. We do not
-# re-select against the test set — the default depth-8 / lr-0.1 / 300-round
-# config is at its plateau and stays the shipped classifier (0.7389 / 0.4652).
+# and the documented full-window hist_* residual, not signal. Keeping the
+# default was itself TEST-INFORMED (it reads the test regression) — a
+# documented, mild cross-run deviation, NOT a re-tune against test
+# (docs/leakage_discipline.md rule 7; future keep/adopt calls should be made on
+# validation). The default depth-8 / lr-0.1 / 300-round config is at its plateau
+# and stays the shipped classifier (0.7389 / 0.4652).
 #
 # REGRESSOR — adopts the tuned config. The same candidate improved the
 # regressor on BOTH validation (RMSE 58.30->57.97) and held-out test (RMSE

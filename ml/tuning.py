@@ -20,17 +20,24 @@ validation slice carved from training inherits rates computed partly from
 validation-period flights — the documented mart residual (ml_flight_features.sql
 says a val slice "must re-derive rates as-of that slice"). We accept it here, but
 NOT on the discredited "common-mode" grounds — the leak is NOT common-mode.
-Instead it was MEASURED not to matter: (1) an exact fit-window-only recompute of
-all hist_* shifts validation PR-AUC UNEQUALLY across learners (XGB +0.0008 vs
-LightGBM +0.0002) yet does NOT flip the XGB-vs-LightGBM selection winner — re-
-derive fit-window rates for any closer/wider future selection
-(docs/leakage_discipline.md rule 10); (2) the reported tuned-vs-untuned
-comparison is on the leak-free TEST set (test hist_* never include test-window
-flights); (3) keeping
-the full-window rates makes the tuning feature distribution identical to what
-the shipped full-window model actually trains on — re-derived shorter-window
-rates would optimize params for a distribution the shipped model never sees;
-(4) re-deriving in Python would violate the SQL-only gold rule (CLAUDE.md §5).
+What was MEASURED is the ADJACENT experiments.py XGB-vs-LightGBM family
+selection: an exact fit-window-only recompute of all hist_* shifts validation
+PR-AUC UNEQUALLY (XGB +0.0008 vs LightGBM +0.0002) without flipping that winner
+(docs/leakage_discipline.md rule 10). This tuning.py path — an XGBoost
+hyperparameter grid + a regressor RMSE grid — was NOT separately measured, and
+the classifier grid is a flat plateau (val PR-AUC 0.514-0.518) where a ~0.0006
+unequal shift could in principle reorder near-tied configs: a KNOWN residual,
+not verified-immaterial here. It does not reach the SHIPPED configs, because the
+final keep/adopt decisions were confirmed on the leak-free TEST set (classifier
+kept default on its test regression; regressor adopted on val-and-test
+agreement) — re-derive fit-window rates before selecting purely on val. The
+other reasons to accept it: (2) the reported tuned-vs-untuned comparison is on
+the leak-free TEST set (test hist_* never include test-window flights);
+(3) keeping the full-window rates makes the tuning feature distribution
+identical to what the shipped full-window model actually trains on — re-derived
+shorter-window rates would optimize params for a distribution the shipped model
+never sees; (4) re-deriving in Python would violate the SQL-only gold rule
+(CLAUDE.md §5).
 
 Outcome (the split adoption)
 ----------------------------

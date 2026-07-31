@@ -12,8 +12,9 @@ test. The harness never SELECTS on the test set, so its held-out numbers are not
 optimistic. Only the LEARNER changes — identical ``is_training_row`` split,
 identical ``FEATURES``, identical pre-departure boundary (CLAUDE.md §9), and the
 same leakage self-audit hard-gate ``ml.train`` runs. The SHIPPED classifier
-stays ``ml.train``'s XGBoost until a challenger genuinely BEATS it on test and
-is adopted deliberately.
+stays ``ml.train``'s XGBoost until a challenger WINS this validation selection
+against it and survives the one-time test confirmation without regressing —
+adopting on the test score alone would re-select on test.
 
 Reality check (see ml/README + blog_material.md ch. 5): the classifier sits on
 a flat plateau — Stage 3's six tuned configs spanned val PR-AUC 0.514–0.518 and

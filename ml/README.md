@@ -90,12 +90,17 @@ regressor headline. The **classifier keeps its defaults**: the same candidate
 won on validation (+0.0025 PR-AUC) but REGRESSED on the held-out test
 (ROC 0.7389 → 0.7373, PR-AUC 0.4652 → 0.4646) — validation-optimism from the
 summer val-slice distribution (0.260 delay rate vs the test's 0.197) and the
-documented full-window `hist_*` residual, not signal. We do not re-select
-against the test set, so **the classifier headline stays 0.7389 / 0.4652**. The
-hist_* residual is accepted deliberately: it is common-mode across candidates
-(does not distort the relative ranking) and the reported deltas are on the
-leak-free test set. Both models retrain bit-identically (the regressor pins
-`random_state`; the classifier's `subsample=1` default is unchanged).
+documented full-window `hist_*` residual, not signal. Keeping the default here
+was itself test-informed (it reads the test regression) — a documented, mild
+cross-run deviation — so **the classifier headline stays 0.7389 / 0.4652**. The
+hist_* residual is accepted deliberately, but NOT on the discredited
+"common-mode" grounds: a fit-window recompute **measured** the leak is *not*
+common-mode (it shifts val PR-AUC unequally — XGB +0.0008 vs LightGBM +0.0002),
+so it can distort a ranking; it did not flip the current winner, but re-derive
+fit-window rates for any closer/wider selection
+(`docs/leakage_discipline.md` rule 10). The reported tuned-vs-untuned deltas are
+on the leak-free test set. Both models retrain bit-identically (the regressor
+pins `random_state`; the classifier's `subsample=1` default is unchanged).
 
 **Stage 4 — probability calibration (classifier).** `scale_pos_weight` ≈ 3.75
 buys recall on the ~1-in-5 positive rate but inflates the raw scores: they
