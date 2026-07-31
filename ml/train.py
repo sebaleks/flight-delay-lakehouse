@@ -48,6 +48,7 @@ from ml import features as f
 from ml.audit import run_audit
 from ml.calibration import build_calibration
 from ml.data import load_mart
+from ml.tracking import log_run
 from ml.tuning import carve
 
 log = logging.getLogger("ml.train")
@@ -372,6 +373,49 @@ def run_training(xgb_rounds: int = 300, logreg_max_iter: int = 200) -> dict:
     # stays byte-comparable across runs on a fixed mart
     results["artifacts_dir"] = str(run_dir)
     log.info("artifacts -> %s", run_dir)
+
+    # ---- experiment tracking (MLflow; GCS-backed artifacts) ----
+    # Pure side effect: logged AFTER metrics.json is written and reads only
+    # `results`, so it cannot change the persisted artifacts or their
+    # determinism. Degrades to a warning if MLflow/GCS is unreachable
+    # (ml/tracking.py). To compare alternative learners, see ml/experiments.py.
+    cal_test = results["calibration"]["test"]
+    log_run(
+        run_name=run_dir.name,
+        params={
+            "model": "xgboost",
+            "xgb_rounds": xgb_rounds,
+            "logreg_max_iter": logreg_max_iter,
+            "scale_pos_weight": round(spw, 4),
+            "n_train": split["n_train"],
+            "n_test": split["n_test"],
+            "calibration_method": results["calibration"]["serving_method"],
+            **{f"clf_{k}": v for k, v in CLASSIFIER_PARAMS.items()},
+            **{f"reg_{k}": v for k, v in REGRESSOR_PARAMS.items()},
+        },
+        metrics={
+            "clf_roc_auc": results["xgb_classifier"]["roc_auc"],
+            "clf_pr_auc": results["xgb_classifier"]["pr_auc"],
+            "clf_accuracy": results["xgb_classifier"]["accuracy"],
+            "reg_rmse": results["xgb_regressor"]["rmse"],
+            "reg_mae": results["xgb_regressor"]["mae"],
+            "logreg_roc_auc": results["logreg_classifier"]["roc_auc"],
+            "logreg_pr_auc": results["logreg_classifier"]["pr_auc"],
+            "cal_raw_brier": cal_test["raw"]["brier"],
+            "cal_platt_brier": cal_test["platt"]["brier"],
+            "cal_raw_ece": cal_test["raw"]["ece"],
+            "cal_platt_ece": cal_test["platt"]["ece"],
+            "test_base_rate": results["baselines"]["test_delay_base_rate"],
+        },
+        tags={
+            "pipeline": "train",
+            "split": "time-based",
+            "leakage_boundary": "pre-departure",
+            "calibration": results["calibration"]["serving_method"],
+        },
+        artifact_dir=run_dir,
+    )
+
     log.info("total wall time %.1f min", (time.time() - t0) / 60)
 
     print("\n===== RESULTS =====")

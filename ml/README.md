@@ -36,6 +36,8 @@ design removes the channel by construction.
 | `tuning.py`      | Stage 3 hyperparameter search (reproducible; regressor tuned) |
 | `train.py`       | Split, fit both models, evaluate on held-out rows, artifacts |
 | `calibration.py` | Stage 4 probability calibration of the classifier (Platt map) |
+| `tracking.py`    | MLflow experiment tracking (GCS-backed artifacts; graceful) |
+| `experiments.py` | Model-comparison harness ('try different models'; e.g. LightGBM) |
 
 ## Headline (cascade/rotation RESTRICTED + hourly weather, held-out Jul–Dec 2024)
 
@@ -180,6 +182,38 @@ uv sync --extra ml
 uv run --extra ml python -m ml.audit    # leakage audit alone
 uv run --extra ml python -m ml.train    # audit + train + evaluate
 ```
+
+## Experiment tracking (MLflow) + trying different models
+
+Every `ml.train` run is logged to **MLflow** (`ml/tracking.py`): hyperparameters,
+held-out metrics (classifier ROC/PR-AUC, regressor RMSE/MAE, calibration
+Brier/ECE, baselines), and the whole artifacts directory. **GCS-backed
+artifacts, local metadata backend** — run metadata lives in a git-ignored SQLite
+DB (`MLFLOW_TRACKING_URI`, default `sqlite:///mlflow.db`; MLflow can't keep
+metadata in GCS without a standing server), while artifacts (models, `metrics.json`) go to
+`gs://$GCS_BUCKET/mlflow`, reusing the bronze bucket. Tracking is a **pure side
+effect** — it reads what the pipeline already computed and never touches the
+fits or `metrics.json`, so determinism is unaffected — and it **degrades to a
+warning** if MLflow/GCS is unreachable (a tracking outage never fails a run).
+Disable with `MLFLOW_TRACKING=off`. Browse runs with `mlflow ui`.
+
+```
+uv run --extra ml python -m ml.experiments   # XGBoost vs LightGBM, logged
+uv run --extra ml mlflow ui --backend-store-uri sqlite:///mlflow.db   # compare runs
+```
+
+`ml.experiments` fits alternative **classifiers** on the *identical* split and
+`FEATURES` (only the learner changes — same pre-departure boundary, CLAUDE.md
+§9) and logs each for an apples-to-apples comparison; the first alternative is
+**LightGBM**. The shipped classifier stays `ml.train`'s XGBoost until an
+alternative **beats it on the held-out test** and is adopted deliberately
+(selected on a validation slice, never re-selected against test — see Stage 3).
+**Expectations, stated honestly:** the classifier is on a flat plateau (Stage 3:
+six configs spanned val PR-AUC 0.514–0.518, the tuned candidate *regressed* on
+test), so `0.7389 / 0.4652` is a **signal ceiling** of leak-free pre-departure
+features, not a model-capacity limit — a model-family swap reshuffles the last
+~0.002. The levers that move the number are new leak-free features or a
+different (real-time) regime, not a bigger learner (`blog_material.md` ch. 5/25).
 
 ## Inference endpoint (FastAPI): scoring FUTURE flights with real forecasts
 

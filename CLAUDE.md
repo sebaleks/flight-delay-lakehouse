@@ -128,6 +128,17 @@ Two independent consumption models live in gold:
   and the full three-way comparison live in `int_aircraft_rotation`'s
   header and PR #18. Current held-out headline: **ROC 0.7389 /
   PR-AUC 0.4652** (restricted; details in `ml/README.md`).
+- **Experiment tracking & model comparison.** MLflow (`ml/tracking.py`) tracks
+  every training run — **artifacts to `gs://$GCS_BUCKET/mlflow`, run metadata in
+  a local SQLite backend** (`mlflow.db`, git-ignored; a tracking server is the
+  upgrade path for cloud metadata). Tracking is a **pure side effect**: it never
+  changes fits, `metrics.json`, or determinism, and degrades to a warning if
+  MLflow/GCS is unreachable (a tracking outage must never fail a run).
+  Alternative learners are explored in `ml/experiments.py` on the **identical
+  split/features** — only the learner changes; the leakage boundary above is
+  fixed — and the shipped model changes only when an alternative **beats it on
+  the held-out test**, selected on a validation slice, never re-selected against
+  test.
 
 ## 10. Repo Layout (see README for detail)
 
