@@ -211,8 +211,9 @@ uv run --extra ml mlflow ui --backend-store-uri sqlite:///mlflow.db   # compare 
 `FEATURES` (only the learner changes — same pre-departure boundary, CLAUDE.md
 §9) and logs each for an apples-to-apples comparison; the first alternative is
 **LightGBM**. The shipped classifier stays `ml.train`'s XGBoost until an
-alternative **beats it on the held-out test** and is adopted deliberately
-(selected on a validation slice, never re-selected against test — see Stage 3).
+alternative **wins the validation selection** against it (the held-out test is a
+one-time confirmation, NOT the adoption gate — adopting on a test comparison
+re-selects on test; see Stage 3 and `docs/leakage_discipline.md` rule 7).
 **Expectations, stated honestly:** the classifier is on a flat plateau (Stage 3:
 six configs spanned val PR-AUC 0.514–0.518, the tuned candidate *regressed* on
 test), so `0.7389 / 0.4652` is a **signal ceiling** of leak-free pre-departure

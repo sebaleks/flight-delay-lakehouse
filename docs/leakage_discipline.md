@@ -175,7 +175,7 @@ rules 7 & 10._
 | Path | 1 audit gate | 4–5 split from `SPLIT_COL` | 6 select on val, not test | 7 test scored once, winner only | 8 spw from fit rows | Verdict |
 |---|---|---|---|---|---|---|
 | **`train.py`** (`run_training`) | ✅ `:195` (after `load_mart :192`, before any fit) | ✅ `:200`; `split_report :94` | — no selection (uses the tuned config from Stage 3) | ✅ scores clf/reg/logreg on test once each (`:263`, `:332`, `:239`); slices `:299` are post-hoc **reports** on the same final model | ✅ `spw` from `train_mask` `:250` | **PASS** |
-| **`tuning.py`** (`run_tuning`) | ✅ `:220` | ✅ `carve :221` | ✅ `_search` fits on `fit`, scores `val`; "test scoring **deferred** until after both winners chosen" `:239` | ⚠️ **PASS within-run** (`_fit_final` scores test only after val selection `:211,214`); but the final keep-classifier-default-vs-adopt-regressor-tuned decision compared the configs' **test** scores — test-informed (documented, mild: a two-way choice, not a search) | ✅ `spw_fit :226` / `spw_full :227` | **PASS** (within-run; see rule 7 caveat) |
+| **`tuning.py`** (`run_tuning`) | ✅ `:222` | ✅ `carve :223` | ✅ `_search` fits on `fit`, scores `val`; "test scoring **deferred** until after both winners chosen" `:241` | ⚠️ **PASS within-run** (`_fit_final` scores test only after val selection `:213,216`); but the final keep-classifier-default-vs-adopt-regressor-tuned decision compared the configs' **test** scores — test-informed (documented, mild: a two-way choice, not a search) | ✅ `spw_fit :228` / `spw_full :229` | **PASS** (within-run; see rule 7 caveat) |
 | **`experiments.py`** (`compare_classifiers`) | ✅ `:122` **(fixed, PR #23 `18a78df`)** | ✅ `carve :126`; `split_report :123` | ✅ **(fixed, PR #24)** fit on `fit`, score `val` `:146`; winner = max val PR-AUC `:172` | ⚠️ within-run only the winner is scored on test `:175`, BUT the printed guidance **previously framed** a challenger's **test** score vs `0.7389/0.4652` as the adoption criterion — test-informed (documented, mild); **corrected in this PR** to recommend the val winner with test as confirmation only | ✅ `spw_fit :129` / `spw_full :130` | **PASS** (within-run; guidance fixed in this PR) |
 | **`calibration.py`** (`build_calibration`) | via caller (`train.py` runs the audit) | N/A (receives masks-worth of scores) | N/A — ships the fixed Platt map, no model selection | reads test **only** for reporting + the AUC gate (`:206-224`); **fits on `p_val` only** `:204` | N/A | **PASS** |
 | **`serving.py` / `api.py`** | N/A — no training/fitting | N/A | N/A | N/A | N/A | **PASS** (item 12: pre-departure inputs; estimates `where is_training_row`; schema gate) |
@@ -184,9 +184,9 @@ rules 7 & 10._
 after Codex's re-review of this doc; do not read the table as unqualified PASS):
 
 1. **The FINAL config selection was test-informed** (rule 7 caveat). Stage 3's
-   keep-classifier-default-vs-adopt-regressor-tuned decision and
-   `experiments.py`'s printed adoption guidance both compare candidates' **test**
-   scores across runs. Mild (a two-way keep/adopt decision, not a search) and the
+   keep-classifier-default-vs-adopt-regressor-tuned decision compared candidates'
+   **test** scores across runs (and `experiments.py`'s printed guidance did too,
+   now corrected). Mild (a two-way keep/adopt decision, not a search) and the
    reported metrics stay held-out — but not an unqualified PASS. The
    `experiments.py` guidance is corrected (recommend the validation winner; test
    is a one-time confirmation, not an adoption gate).

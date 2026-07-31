@@ -27,11 +27,13 @@ PR-AUC UNEQUALLY (XGB +0.0008 vs LightGBM +0.0002) without flipping that winner
 hyperparameter grid + a regressor RMSE grid — was NOT separately measured, and
 the classifier grid is a flat plateau (val PR-AUC 0.514-0.518) where a ~0.0006
 unequal shift could in principle reorder near-tied configs: a KNOWN residual,
-not verified-immaterial here. It does not reach the SHIPPED configs, because the
-final keep/adopt decisions were confirmed on the leak-free TEST set (classifier
-kept default on its test regression; regressor adopted on val-and-test
-agreement) — re-derive fit-window rates before selecting purely on val. The
-other reasons to accept it: (2) the reported tuned-vs-untuned comparison is on
+not verified-immaterial here. The keep/adopt BINARY is test-confirmed, which
+bounds the risk (classifier kept default on its test regression; regressor
+adopted on val-and-test agreement) — but the exact tuned config was still
+SELECTED from the leaky val grid (the depth-12 regressor won on val RMSE), so
+WHICH config ships is itself a known residual until fit-window rates are
+re-derived. The other reasons to accept it: (2) the reported tuned-vs-untuned
+comparison is on
 the leak-free TEST set (test hist_* never include test-window flights);
 (3) keeping the full-window rates makes the tuning feature distribution
 identical to what the shipped full-window model actually trains on — re-derived

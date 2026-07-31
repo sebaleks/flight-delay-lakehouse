@@ -136,9 +136,10 @@ Two independent consumption models live in gold:
   MLflow/GCS is unreachable (a tracking outage must never fail a run).
   Alternative learners are explored in `ml/experiments.py` on the **identical
   split/features** — only the learner changes; the leakage boundary above is
-  fixed — and the shipped model changes only when an alternative **beats it on
-  the held-out test**, selected on a validation slice, never re-selected against
-  test.
+  fixed — and the shipped model changes only when an alternative **wins the
+  validation selection** against it, with the held-out test used as a one-time
+  confirmation report, never the adoption gate (adopting on a test comparison
+  re-selects on test; see `docs/leakage_discipline.md` rule 7).
 
 ## 10. Repo Layout (see README for detail)
 
