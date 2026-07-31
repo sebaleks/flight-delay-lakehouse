@@ -199,7 +199,7 @@ Disable with `MLFLOW_TRACKING=off`. Browse runs with `mlflow ui`.
 
 ```
 uv run --extra ml python -m ml.experiments   # XGBoost vs LightGBM, logged
-uv run --extra ml mlflow ui                   # compare runs in the browser
+uv run --extra ml mlflow ui --backend-store-uri sqlite:///mlflow.db   # compare runs
 ```
 
 `ml.experiments` fits alternative **classifiers** on the *identical* split and

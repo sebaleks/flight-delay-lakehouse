@@ -53,6 +53,7 @@ ml/artifacts/
 # artifacts go to gs://$GCS_BUCKET/mlflow.
 mlruns/
 mlflow.db
+mlflow.db-*
 mlartifacts/
 *.pkl
 *.joblib

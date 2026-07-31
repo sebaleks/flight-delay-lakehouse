@@ -33,8 +33,9 @@ from sklearn.metrics import accuracy_score, average_precision_score, roc_auc_sco
 
 from ml import features as f
 from ml import tracking
+from ml.audit import run_audit
 from ml.data import load_mart
-from ml.train import CLASSIFIER_PARAMS
+from ml.train import CLASSIFIER_PARAMS, split_report
 
 log = logging.getLogger("ml.experiments")
 SEED = 0
@@ -97,7 +98,13 @@ def compare_classifiers() -> dict:
     """Fit every candidate on the identical split/features, log each to MLflow,
     and print a held-out-test comparison table."""
     t0 = time.time()
-    df, _bq, _dataset = load_mart()
+    df, bq, dataset = load_mart()
+    # same guards as ml.train / ml.tuning: the leakage self-audit is a HARD GATE,
+    # and split_report asserts the is_training_row partition is clean and
+    # time-ordered (train_date_max < test_date_min) — a comparison that claims
+    # the production boundary must enforce it, not just assume it.
+    run_audit(bq, dataset)
+    log.info("split: %s", split_report(df))
     train = df[f.SPLIT_COL].to_numpy()
     test = ~train
     X = df[f.FEATURES]

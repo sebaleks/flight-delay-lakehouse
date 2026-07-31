@@ -24,6 +24,8 @@ requires mlflow to be installed. Disable entirely with ``MLFLOW_TRACKING=off``.
 from __future__ import annotations
 
 import logging
+import math
+import numbers
 import os
 from pathlib import Path
 
@@ -64,14 +66,30 @@ def configure() -> bool:
 
         mlflow.set_tracking_uri(tracking_uri())
         loc = artifact_location()
-        if mlflow.get_experiment_by_name(experiment_name()) is None:
+        exp = mlflow.get_experiment_by_name(experiment_name())
+        if exp is None:
             mlflow.create_experiment(experiment_name(), artifact_location=loc)
+            exp = mlflow.get_experiment_by_name(experiment_name())
         mlflow.set_experiment(experiment_name())
+        # artifact_location is FIXED at experiment creation. A pre-existing
+        # experiment keeps its original store even if GCS_BUCKET changed since,
+        # so log the experiment's ACTUAL location (never a misleading gs://) and
+        # warn loudly on a mismatch — switch by setting a new MLFLOW_EXPERIMENT.
+        actual = exp.artifact_location if exp is not None else loc
+        if loc and actual and not str(actual).startswith(loc):
+            log.warning(
+                "mlflow experiment %r already exists with artifact_location=%s; "
+                "artifacts log THERE, not the configured %s (set a new "
+                "MLFLOW_EXPERIMENT to use the GCS location)",
+                experiment_name(),
+                actual,
+                loc,
+            )
         log.info(
             "mlflow: uri=%s experiment=%s artifacts=%s",
             tracking_uri(),
             experiment_name(),
-            loc or "(backend default)",
+            actual or "(backend default)",
         )
         return True
     except Exception as e:  # noqa: BLE001 — tracking must never break a run
@@ -94,11 +112,13 @@ def log_run(
     try:
         import mlflow
 
-        # only finite numeric metrics reach mlflow.log_metrics
+        # only FINITE, non-bool real scalars reach mlflow.log_metrics — numbers.Real
+        # keeps numpy floats/ints (isinstance(np.float32, float) is False), bool is
+        # excluded (it is an int subclass), and NaN/inf are dropped, not stored
         clean_metrics = {
             k: float(v)
             for k, v in metrics.items()
-            if isinstance(v, (int, float)) and not isinstance(v, bool)
+            if isinstance(v, numbers.Real) and not isinstance(v, bool) and math.isfinite(v)
         }
         with mlflow.start_run(run_name=run_name):
             if tags:
