@@ -12,7 +12,12 @@ warehouse side is pinned by three standing dbt tests
 (`assert_ml_features_no_leakage`, `assert_ml_weather_obs_before_departure`,
 `assert_ml_rotation_schedule_only`); this checklist governs the **Python** side.
 
-_Last full audit: 2026-07-31 — all five mart-touching paths PASS (table below)._
+_Last full audit: 2026-07-31 — all five mart-touching paths pass the applicable
+rules WITHIN a run, with two documented cross-cutting caveats surfaced by a
+re-review: (1) the final config selection was test-informed across runs, and
+(2) the `hist_*` values on a training-window validation slice are leaky and not
+common-mode (measured — did not flip the current selection). See the table and
+rules 7 & 10._
 
 ---
 
@@ -71,6 +76,22 @@ _Last full audit: 2026-07-31 — all five mart-touching paths PASS (table below)
    *one* final model on test for multiple diagnostic **slices/reports** is fine;
    scoring *candidates* on test to pick one is not.)
 
+   **Cross-invocation caveat (honest — do not claim unqualified PASS).** Rule 7
+   holds *within a single run* of `tuning.py`/`experiments.py`. But the project's
+   FINAL config choices were **test-informed across runs**: Stage 3 kept the
+   classifier default vs adopted the tuned regressor by comparing each config's
+   **test** score (the tuned classifier regressed on test → kept default; the
+   tuned regressor improved on test → adopted), and `experiments.py`'s printed
+   guidance frames a challenger's **test** score vs the incumbent `0.7389/0.4652`
+   as the adoption criterion. This is a **documented, mild** deviation — a
+   two-way keep/adopt *decision*, not a search over many configs — and every
+   reported number is still **held-out**: each config was scored on test exactly
+   once and nothing was re-fit to improve a test number. The rigorous form is to
+   make the keep/adopt call on the **validation** slice and treat the test score
+   as a one-time confirmation report only; `experiments.py`'s printed guidance is
+   corrected to do exactly that (recommend the validation winner; test is
+   confirmation, not an adoption gate).
+
 8. **`scale_pos_weight` is computed from the fitting rows in use** — the
    fit-set (`spw_fit`) for validation-stage fits, the full training window
    (`spw_full`) for the final/test fit — never from test rows.
@@ -86,13 +107,39 @@ _Last full audit: 2026-07-31 — all five mart-touching paths PASS (table below)
    operated-tail links → NULL). The prior leg's ACTUAL arrival delay is
    post-departure and is never an input.
 
-10. **The `hist_*` residual on a training-window validation slice is documented
-    and accepted.** Because `hist_*` aggregate the whole pre-cutoff window, a
-    validation slice inherits rates computed partly from validation-period
-    flights. Accepted rather than re-derived because it is **common-mode across
-    candidates** (does not distort the *relative* ranking selection depends on)
-    and the reported tuned-vs-untuned deltas are on the **leak-free test set**.
-    See the `ml/tuning.py` header.
+10. **The `hist_*` values on a training-window validation slice are LEAKY — and
+    the leak is NOT common-mode (measured, not assumed).** Because `hist_*`
+    aggregate the whole pre-cutoff window, a val row's `hist_*` is computed
+    partly from validation-period labels — `ml_flight_features.sql`'s own header
+    says so: *"anyone carving a validation slice out of the training window must
+    re-derive rates as-of that slice."* `tuning.py`/`experiments.py` carve such a
+    slice and do **not** re-derive, so their validation-stage scores are
+    optimistic. The prior "common-mode, doesn't distort the ranking"
+    justification is **wrong**: different learners exploit the leak by different
+    amounts.
+
+    **Measured (2026-07-31).** A fit-window-only recompute of all 18 `hist_*`
+    columns — using the exact mart formula `(n·rate_raw + 50·global)/(n+50)`,
+    validated to reproduce the mart on the whole window to ~1e-8 — was run
+    through the XGB-vs-LightGBM validation selection (fit on the fit-set, score
+    on the val slice):
+
+    | | XGBoost val PR-AUC | LightGBM val PR-AUC |
+    |---|---|---|
+    | leaky (mart, whole-window) | 0.514590 | 0.516557 |
+    | clean (fit-window-only) | 0.513799 | 0.516361 |
+
+    The leak inflates validation PR-AUC by **+0.00079 (XGBoost) vs +0.00020
+    (LightGBM)** — a shift difference of ~0.0006, so it **can** distort the
+    relative ranking. **On this selection it did not change the winner**:
+    LightGBM wins both ways, and removing the leak *widens* its margin
+    (0.0020 → 0.0026) because the leak had flattered XGBoost more. Verified
+    immaterial to the current outcome — but for a closer comparison or a wider
+    search it could matter, so the rigorous form remains to **re-derive rates
+    as-of the validation cutoff** for any selection carved from the training
+    window. The reported tuned-vs-untuned **test** deltas are unaffected (test
+    `hist_*` never include test-window flights). The `ml/tuning.py` header's
+    "common-mode" wording is corrected to point here.
 
 ### E. Calibration
 
@@ -127,18 +174,33 @@ _Last full audit: 2026-07-31 — all five mart-touching paths PASS (table below)
 | Path | 1 audit gate | 4–5 split from `SPLIT_COL` | 6 select on val, not test | 7 test scored once, winner only | 8 spw from fit rows | Verdict |
 |---|---|---|---|---|---|---|
 | **`train.py`** (`run_training`) | ✅ `:192` (after `load_mart :189`, before any fit) | ✅ `:197-198`; `split_report :88-105` | — no selection (uses the tuned config from Stage 3) | ✅ scores clf/reg/logreg on test once each (`:260`, `:329`, `:236`); slices `:296-311` are post-hoc **reports** on the same final model | ✅ `spw` from `train_mask` `:244` | **PASS** |
-| **`tuning.py`** (`run_tuning`) | ✅ `:208` | ✅ `carve :209` | ✅ `_search` fits on `fit`, scores `val`; "test scoring **deferred** until after both winners chosen" `:227` | ✅ `_fit_final` scores test after selection `:199,202` | ✅ `spw_fit :214` / `spw_full :215` | **PASS** |
-| **`experiments.py`** (`compare_classifiers`) | ✅ `:121` **(fixed, PR #24)** | ✅ `carve :125`; `split_report :122` | ✅ **(fixed)** fit on `fit`, score `val` `:145`; winner = max val PR-AUC `:171` | ✅ **(fixed)** only the winner scored on test `:174` | ✅ `spw_fit :128` / `spw_full :129` | **PASS** |
+| **`tuning.py`** (`run_tuning`) | ✅ `:208` | ✅ `carve :209` | ✅ `_search` fits on `fit`, scores `val`; "test scoring **deferred** until after both winners chosen" `:227` | ⚠️ **PASS within-run** (`_fit_final` scores test only after val selection `:199,202`); but the final keep-classifier-default-vs-adopt-regressor-tuned decision compared the configs' **test** scores — test-informed (documented, mild: a two-way choice, not a search) | ✅ `spw_fit :214` / `spw_full :215` | **PASS** (within-run; see rule 7 caveat) |
+| **`experiments.py`** (`compare_classifiers`) | ✅ `:121` **(fixed, PR #24)** | ✅ `carve :125`; `split_report :122` | ✅ **(fixed)** fit on `fit`, score `val` `:145`; winner = max val PR-AUC `:171` | ⚠️ within-run only the winner is scored on test `:174`, BUT the printed guidance frames a challenger's **test** score vs `0.7389/0.4652` as the adoption criterion — test-informed (documented, mild); corrected in follow-up to recommend the val winner with test as confirmation only | ✅ `spw_fit :128` / `spw_full :129` | **PASS** (within-run; guidance fix in follow-up) |
 | **`calibration.py`** (`build_calibration`) | via caller (`train.py` runs the audit) | N/A (receives masks-worth of scores) | N/A — ships the fixed Platt map, no model selection | reads test **only** for reporting + the AUC gate (`:206-224`); **fits on `p_val` only** `:204` | N/A | **PASS** |
 | **`serving.py` / `api.py`** | N/A — no training/fitting | N/A | N/A | N/A | N/A | **PASS** (item 12: pre-departure inputs; estimates `where is_training_row`; schema gate) |
 
-**Result: fully clean.** Every mart-touching path satisfies the applicable
-rules. The gaps Codex found in `experiments.py` (no audit gate; scoring every
-candidate on test) are **fixed and merged** — the audit gate landed in PR #23
-(`18a78df`) and the validation-selection + winner-only-on-test fix in **PR #24
-(merge commit `5b9f765`)**; `compare_classifiers` now runs `run_audit`, selects
-on the validation slice, and scores only the winner on test. Nothing beyond
-`experiments.py` required a fix.
+**Result: clean within-run, with two documented cross-cutting caveats** (added
+after Codex's re-review of this doc; do not read the table as unqualified PASS):
+
+1. **The FINAL config selection was test-informed** (rule 7 caveat). Stage 3's
+   keep-classifier-default-vs-adopt-regressor-tuned decision and
+   `experiments.py`'s printed adoption guidance both compare candidates' **test**
+   scores across runs. Mild (a two-way keep/adopt decision, not a search) and the
+   reported metrics stay held-out — but not an unqualified PASS. The
+   `experiments.py` guidance is corrected (recommend the validation winner; test
+   is a one-time confirmation, not an adoption gate).
+2. **The `hist_*` val-slice leak is real and not common-mode** (rule 10). Fixed
+   within-run selection now happens on the validation slice, but that slice's
+   `hist_*` still carry whole-window (leaky) rates. Measured: it shifts XGBoost's
+   validation PR-AUC ~4× more than LightGBM's (+0.00079 vs +0.00020) yet did
+   **not** flip the current XGB-vs-LightGBM winner. Verified immaterial here;
+   re-derive fit-window rates for any closer/wider future selection.
+
+The gaps Codex originally found in `experiments.py` (no audit gate; scoring every
+candidate on test) are **fixed and merged** — the audit gate in PR #23
+(`18a78df`), the validation-selection + winner-only-on-test fix in **PR #24
+(`5b9f765`)**. No mart-touching path has an *un*documented leak, and nothing
+beyond `experiments.py` needed a code fix.
 
 ### Notes carried out of the audit
 

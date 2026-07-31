@@ -203,17 +203,19 @@ def compare_classifiers() -> dict:
             f"{name:10s} {m['clf_roc_auc']:>10.6f} {m['clf_pr_auc']:>10.6f} "
             f"{m['clf_accuracy']:>10.4f}{star}"
         )
+    print(f"\nrecommendation: ship '{winner}' — it won the VALIDATION selection above.")
     print(
-        f"\nwinner '{winner}' confirmed on HELD-OUT TEST: "
+        "held-out TEST (a ONE-TIME confirmation, NOT a selection/adoption gate): "
         f"roc={test_metrics['clf_roc_auc']:.6f} pr={test_metrics['clf_pr_auc']:.6f} "
         f"acc={test_metrics['clf_accuracy']:.4f}"
     )
     if winner == "xgboost":
-        print("(re-anchors the shipped XGBoost headline, roc 0.7389 / pr 0.4652.)")
+        print("this re-anchors the shipped XGBoost headline (roc 0.7389 / pr 0.4652).")
     else:
         print(
-            "shipped XGBoost headline to beat: roc 0.7389 / pr 0.4652 — adopt this "
-            "challenger only if it BEATS that on test (swap the shipped model in ml.train)."
+            f"'{winner}' beat XGBoost on VALIDATION. Do NOT adopt it merely because a "
+            "test number beats 0.7389 / 0.4652 — that re-selects on test. To ship it, "
+            "wire it into ml.train and re-run this validation selection with it included."
         )
     mins = (time.time() - t0) / 60
     n_ok = sum(logged)

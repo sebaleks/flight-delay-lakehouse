@@ -17,11 +17,16 @@ hist_* leakage residual (accepted, noted)
 ------------------------------------------
 The mart's hist_* rates aggregate the WHOLE pre-cutoff training window, so a
 validation slice carved from training inherits rates computed partly from
-validation-period flights — the documented mart residual. We ACCEPT it here
-rather than re-derive rates as-of the validation cutoff because: (1) it is
-common-mode across every candidate, so it does not distort the RELATIVE ranking
-selection depends on; (2) the reported tuned-vs-untuned comparison is on the
-leak-free TEST set (test hist_* never include test-window flights); (3) keeping
+validation-period flights — the documented mart residual (ml_flight_features.sql
+says a val slice "must re-derive rates as-of that slice"). We accept it here, but
+NOT on the discredited "common-mode" grounds — the leak is NOT common-mode.
+Instead it was MEASURED not to matter: (1) an exact fit-window-only recompute of
+all hist_* shifts validation PR-AUC UNEQUALLY across learners (XGB +0.0008 vs
+LightGBM +0.0002) yet does NOT flip the XGB-vs-LightGBM selection winner — re-
+derive fit-window rates for any closer/wider future selection
+(docs/leakage_discipline.md rule 10); (2) the reported tuned-vs-untuned
+comparison is on the leak-free TEST set (test hist_* never include test-window
+flights); (3) keeping
 the full-window rates makes the tuning feature distribution identical to what
 the shipped full-window model actually trains on — re-derived shorter-window
 rates would optimize params for a distribution the shipped model never sees;
