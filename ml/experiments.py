@@ -13,8 +13,10 @@ optimistic. Only the LEARNER changes — identical ``is_training_row`` split,
 identical ``FEATURES``, identical pre-departure boundary (CLAUDE.md §9), and the
 same leakage self-audit hard-gate ``ml.train`` runs. The SHIPPED classifier
 stays ``ml.train``'s XGBoost until a challenger WINS this validation selection
-against it and survives the one-time test confirmation without regressing —
-adopting on the test score alone would re-select on test.
+against it; the held-out test is then reported ONCE as confirmation, not an
+adoption veto (vetoing a validation winner on its test score would itself be
+test-informed selection — a val/test disagreement is a finding to investigate,
+not a silent gate).
 
 Reality check (see ml/README + blog_material.md ch. 5): the classifier sits on
 a flat plateau — Stage 3's six tuned configs spanned val PR-AUC 0.514–0.518 and

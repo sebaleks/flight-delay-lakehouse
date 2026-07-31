@@ -77,8 +77,12 @@ rules 7 & 10._
    scoring *candidates* on test to pick one is not.)
 
    **Cross-invocation caveat (honest — do not claim unqualified PASS).** Rule 7
-   holds *within a single run* of `tuning.py`/`experiments.py`. But the project's
-   FINAL config choices were **test-informed across runs**: Stage 3 kept the
+   holds *within a single run* of **`experiments.py`** (validation selects, only
+   the winner is scored on test). `tuning.py`'s validation *search* is likewise
+   clean, but `run_tuning` then scores the untuned baseline AND the tuned winner
+   on test to make the keep/adopt call, so its within-run verdict is **WARN**
+   (table). More broadly, the project's FINAL config choices were
+   **test-informed across runs**: Stage 3 kept the
    classifier default vs adopted the tuned regressor by comparing each config's
    **test** score (the tuned classifier regressed on test → kept default; the
    tuned regressor improved on test → adopted), and `experiments.py`'s printed
@@ -176,7 +180,7 @@ rules 7 & 10._
 |---|---|---|---|---|---|---|
 | **`train.py`** (`run_training`) | ✅ `:198` (after `load_mart :195`, before any fit) | ✅ `:203`; `split_report :97` | — no selection (uses the tuned config from Stage 3) | ✅ scores clf/reg/logreg on test once each (`:266`, `:335`, `:242`); slices `:302` are post-hoc **reports** on the same final model | ✅ `spw` from `train_mask` `:253` | **PASS** |
 | **`tuning.py`** (`run_tuning`) | ✅ `:228` | ✅ `carve :229` | ✅ `_search` fits on `fit`, scores `val`; test scoring **deferred** until after val selection `:247` | ⚠️ **WARN** — test scoring is deferred, but `run_tuning` then scores the **untuned baseline (`:257`) AND the tuned winner (`:283`)** on test and the keep/adopt split compares those test scores. So this is **not** "test scored once, winner only" — it is **test-informed config selection for BOTH models** (documented, mild: a two-way keep/adopt per model; rule 7) | ✅ `spw_fit :234` / `spw_full :235` | **WARN** (test-informed split; rule 7) |
-| **`experiments.py`** (`compare_classifiers`) | ✅ `:122` **(fixed, PR #23 `18a78df`)** | ✅ `carve :126`; `split_report :123` | ✅ **(fixed, PR #24)** fit on `fit`, score `val` `:146`; winner = max val PR-AUC `:172` | ⚠️ within-run only the winner is scored on test `:175`, BUT the printed guidance **previously framed** a challenger's **test** score vs `0.7389/0.4652` as the adoption criterion — test-informed (documented, mild); **corrected in this PR** to recommend the val winner with test as confirmation only | ✅ `spw_fit :129` / `spw_full :130` | **PASS** (within-run; guidance fixed in this PR) |
+| **`experiments.py`** (`compare_classifiers`) | ✅ `:124` **(fixed, PR #23 `18a78df`)** | ✅ `carve :128`; `split_report :125` | ✅ **(fixed, PR #24)** fit on `fit`, score `val` `:148`; winner = max val PR-AUC `:174` | ⚠️ within-run only the winner is scored on test `:177`, BUT the printed guidance **previously framed** a challenger's **test** score vs `0.7389/0.4652` as the adoption criterion — test-informed (documented, mild); **corrected in this PR** to recommend the val winner with test as confirmation only | ✅ `spw_fit :131` / `spw_full :132` | **PASS** (within-run; guidance fixed in this PR) |
 | **`calibration.py`** (`build_calibration`) | via caller (`train.py` runs the audit) | N/A (receives masks-worth of scores) | N/A — ships the fixed Platt map, no model selection | reads test **only** for reporting + the AUC gate (`:206-224`); **fits on `p_val` only** `:204` | N/A | **PASS** |
 | **`serving.py` / `api.py`** | N/A — no training/fitting | N/A | N/A | N/A | N/A | **PASS** (item 12: pre-departure inputs; estimates `where is_training_row`; schema gate) |
 
