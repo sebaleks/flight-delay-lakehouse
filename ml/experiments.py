@@ -1,16 +1,19 @@
 """Model-comparison harness — 'try different models', tracked with MLflow.
 
-Fits alternative CLASSIFIERS on the SAME leak-free features and the SAME
-time-based split as the production pipeline (``ml.train``) and logs each to
-MLflow so they compare apples-to-apples. First alternative: LightGBM vs the
-XGBoost baseline.
+Compares alternative CLASSIFIERS on the SAME leak-free features and the SAME
+time-based split as the production pipeline (``ml.train``), tracked in MLflow.
+First alternative: LightGBM vs the XGBoost baseline.
 
-Only the LEARNER changes — identical ``is_training_row`` split, identical
-``FEATURES``, identical pre-departure boundary (CLAUDE.md §9). This is where you
-try new models; the SHIPPED classifier stays ``ml.train``'s XGBoost until an
-alternative genuinely BEATS it on the held-out TEST set and is adopted
-deliberately. Selection discipline still applies: pick on a validation slice
-(as Stage 3 did), never by re-selecting against the test set.
+The workflow is **compare on validation, confirm the winner on test** — the
+same discipline as Stage 3 (``ml.tuning``). Each candidate is fit on the fit-set
+and scored on a validation slice carved from INSIDE the training window; the
+winner is retrained on the full training window and scored ONCE on the held-out
+test. The harness never SELECTS on the test set, so its held-out numbers are not
+optimistic. Only the LEARNER changes — identical ``is_training_row`` split,
+identical ``FEATURES``, identical pre-departure boundary (CLAUDE.md §9), and the
+same leakage self-audit hard-gate ``ml.train`` runs. The SHIPPED classifier
+stays ``ml.train``'s XGBoost until a challenger genuinely BEATS it on test and
+is adopted deliberately.
 
 Reality check (see ml/README + blog_material.md ch. 5): the classifier sits on
 a flat plateau — Stage 3's six tuned configs spanned val PR-AUC 0.514–0.518 and
@@ -36,6 +39,7 @@ from ml import tracking
 from ml.audit import run_audit
 from ml.data import load_mart
 from ml.train import CLASSIFIER_PARAMS, split_report
+from ml.tuning import carve
 
 log = logging.getLogger("ml.experiments")
 SEED = 0
@@ -52,8 +56,10 @@ def _clf_metrics(y, scores) -> dict:
     }
 
 
-def fit_xgboost(X, y, train, test, spw) -> dict:
-    """The production baseline learner (same config as ml.train's classifier)."""
+def fit_xgboost(X, y, fit_mask, eval_mask, spw) -> dict:
+    """The production baseline learner (same config as ml.train's classifier).
+    Fits on fit_mask, scores on eval_mask — the caller decides whether that is
+    (fit-set -> validation) for selection or (full-train -> test) for confirmation."""
     model = xgb.XGBClassifier(
         n_estimators=N_ESTIMATORS,
         **CLASSIFIER_PARAMS,
@@ -63,15 +69,16 @@ def fit_xgboost(X, y, train, test, spw) -> dict:
         n_jobs=-1,
         eval_metric="aucpr",
     )
-    model.fit(X[train], y[train])
-    return _clf_metrics(y[test], model.predict_proba(X[test])[:, 1])
+    model.fit(X[fit_mask], y[fit_mask])
+    return _clf_metrics(y[eval_mask], model.predict_proba(X[eval_mask])[:, 1])
 
 
-def fit_lightgbm(X, y, train, test, spw) -> dict:
+def fit_lightgbm(X, y, fit_mask, eval_mask, spw) -> dict:
     """LightGBM on the same features (native categoricals, same lr/rounds/depth).
     Leaf-wise growth differs from XGBoost's level-wise, so this compares model
     FAMILIES at matched lr/rounds/depth, not identical trees. deterministic +
-    force_row_wise for reproducible fits; NaNs handled natively like XGBoost."""
+    force_row_wise for reproducible fits; NaNs handled natively like XGBoost.
+    Fits on fit_mask, scores on eval_mask (see fit_xgboost)."""
     import lightgbm as lgb
 
     model = lgb.LGBMClassifier(
@@ -87,16 +94,24 @@ def fit_lightgbm(X, y, train, test, spw) -> dict:
         n_jobs=-1,
         verbose=-1,
     )
-    model.fit(X[train], y[train], categorical_feature=list(f.CATEGORICAL_FEATURES))
-    return _clf_metrics(y[test], model.predict_proba(X[test])[:, 1])
+    model.fit(X[fit_mask], y[fit_mask], categorical_feature=list(f.CATEGORICAL_FEATURES))
+    return _clf_metrics(y[eval_mask], model.predict_proba(X[eval_mask])[:, 1])
 
 
 CANDIDATES = {"xgboost": fit_xgboost, "lightgbm": fit_lightgbm}
 
 
 def compare_classifiers() -> dict:
-    """Fit every candidate on the identical split/features, log each to MLflow,
-    and print a held-out-test comparison table."""
+    """SELECT a classifier family on a time-based VALIDATION slice, then confirm
+    the winner ONCE on the held-out test — never selecting on test (the same
+    discipline ml.tuning uses). Every fit is logged to MLflow.
+
+    Each candidate is fit on the fit-set (train before VAL_START) and scored on
+    the validation slice (last 8 weeks of train); the winner (max val PR-AUC) is
+    retrained on the FULL training window and scored once on test. Because the
+    summer val slice has a higher delay base rate (~0.260) than test (~0.197),
+    val PR-AUC is not comparable in absolute terms to test PR-AUC — only the
+    RELATIVE ranking within the validation slice drives selection."""
     t0 = time.time()
     df, bq, dataset = load_mart()
     # same guards as ml.train / ml.tuning: the leakage self-audit is a HARD GATE,
@@ -105,47 +120,105 @@ def compare_classifiers() -> dict:
     # the production boundary must enforce it, not just assume it.
     run_audit(bq, dataset)
     log.info("split: %s", split_report(df))
-    train = df[f.SPLIT_COL].to_numpy()
-    test = ~train
+    # carve: full-train, fit (train before VAL_START), val (last 8 weeks of
+    # train), test — the exact slice ml.tuning selects on.
+    train, fit, val, test = carve(df)
     X = df[f.FEATURES]
     y = df["label_arr_del15"].to_numpy()
-    spw = float((train.sum() - y[train].sum()) / y[train].sum())
-    log.info("comparison: n_train=%d n_test=%d spw=%.4f", int(train.sum()), int(test.sum()), spw)
+    spw_fit = float((fit.sum() - y[fit].sum()) / y[fit].sum())
+    spw_full = float((train.sum() - y[train].sum()) / y[train].sum())
+    log.info(
+        "carve: fit=%d val=%d test=%d spw_fit=%.4f spw_full=%.4f",
+        int(fit.sum()),
+        int(val.sum()),
+        int(test.sum()),
+        spw_fit,
+        spw_full,
+    )
 
-    results: dict = {}
-    for name, fit in CANDIDATES.items():
+    logged: list[bool] = []  # ACTUAL MLflow success, not just the env switch
+
+    # ---- SELECTION: fit on the FIT set, score on VALIDATION (never test) ----
+    val_results: dict = {}
+    for name, fitfn in CANDIDATES.items():
         ts = time.time()
-        metrics = fit(X, y, train, test, spw)
-        results[name] = metrics
-        log.info("%-9s %s (%.1f min)", name, metrics, (time.time() - ts) / 60)
+        m = fitfn(X, y, fit, val, spw_fit)
+        val_results[name] = m
+        log.info("val %-9s %s (%.1f min)", name, m, (time.time() - ts) / 60)
+        logged.append(
+            tracking.log_run(
+                run_name=f"select-{name}",
+                params={
+                    "model": name,
+                    "n_estimators": N_ESTIMATORS,
+                    "learning_rate": LEARNING_RATE,
+                    "max_depth": MAX_DEPTH,
+                    "scale_pos_weight": round(spw_fit, 4),
+                    "n_fit": int(fit.sum()),
+                    "n_val": int(val.sum()),
+                },
+                metrics=m,
+                tags={
+                    "comparison": "classifier",
+                    "stage": "validation",
+                    "model": name,
+                    "split": "time-based",
+                    "leakage_boundary": "pre-departure",
+                },
+            )
+        )
+
+    winner = max(val_results, key=lambda n: val_results[n]["clf_pr_auc"])
+
+    # ---- CONFIRMATION: retrain the winner on FULL train, score ONCE on test ----
+    test_metrics = CANDIDATES[winner](X, y, train, test, spw_full)
+    logged.append(
         tracking.log_run(
-            run_name=f"classifier-{name}",
+            run_name=f"test-{winner}",
             params={
-                "model": name,
+                "model": winner,
                 "n_estimators": N_ESTIMATORS,
                 "learning_rate": LEARNING_RATE,
                 "max_depth": MAX_DEPTH,
-                "scale_pos_weight": round(spw, 4),
+                "scale_pos_weight": round(spw_full, 4),
                 "n_train": int(train.sum()),
                 "n_test": int(test.sum()),
             },
-            metrics=metrics,
+            metrics=test_metrics,
             tags={
                 "comparison": "classifier",
-                "model": name,
+                "stage": "test-confirmation",
+                "model": winner,
                 "split": "time-based",
                 "leakage_boundary": "pre-departure",
             },
         )
+    )
 
-    print("\n===== CLASSIFIER COMPARISON (held-out test; same split/features) =====")
+    print("\n===== CLASSIFIER SELECTION (validation slice; winner picked HERE) =====")
     print(f"{'model':10s} {'roc_auc':>10s} {'pr_auc':>10s} {'accuracy':>10s}")
-    for name, m in results.items():
-        roc, pr, acc = m["clf_roc_auc"], m["clf_pr_auc"], m["clf_accuracy"]
-        print(f"{name:10s} {roc:>10.6f} {pr:>10.6f} {acc:>10.4f}")
+    for name, m in val_results.items():
+        star = "  <- winner" if name == winner else ""
+        print(
+            f"{name:10s} {m['clf_roc_auc']:>10.6f} {m['clf_pr_auc']:>10.6f} "
+            f"{m['clf_accuracy']:>10.4f}{star}"
+        )
+    print(
+        f"\nwinner '{winner}' confirmed on HELD-OUT TEST: "
+        f"roc={test_metrics['clf_roc_auc']:.6f} pr={test_metrics['clf_pr_auc']:.6f} "
+        f"acc={test_metrics['clf_accuracy']:.4f}"
+    )
+    if winner == "xgboost":
+        print("(re-anchors the shipped XGBoost headline, roc 0.7389 / pr 0.4652.)")
+    else:
+        print(
+            "shipped XGBoost headline to beat: roc 0.7389 / pr 0.4652 — adopt this "
+            "challenger only if it BEATS that on test (swap the shipped model in ml.train)."
+        )
     mins = (time.time() - t0) / 60
-    print(f"\ntotal {mins:.1f} min  (runs logged to MLflow: {tracking.enabled()})")
-    return results
+    n_ok = sum(logged)
+    print(f"\ntotal {mins:.1f} min  (MLflow runs logged: {n_ok}/{len(logged)})")
+    return {"validation": val_results, "winner": winner, "test": test_metrics}
 
 
 def main() -> None:

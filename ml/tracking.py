@@ -103,12 +103,14 @@ def log_run(
     metrics: dict,
     tags: dict | None = None,
     artifact_dir: str | Path | None = None,
-) -> None:
+) -> bool:
     """Log one run (params, scalar metrics, tags, and — if given — the whole
     artifacts directory) to MLflow. Pure side effect; swallows ALL errors so a
-    tracking/GCS outage never fails the caller. No-op if tracking is disabled."""
+    tracking/GCS outage never fails the caller. Returns True only if the run was
+    ACTUALLY logged — False when tracking is disabled or logging failed — so
+    callers can report real success rather than just the env switch."""
     if not configure():
-        return
+        return False
     try:
         import mlflow
 
@@ -128,5 +130,7 @@ def log_run(
             if artifact_dir is not None and Path(artifact_dir).is_dir():
                 mlflow.log_artifacts(str(artifact_dir))
         log.info("mlflow: logged run '%s' to experiment %s", run_name, experiment_name())
+        return True
     except Exception as e:  # noqa: BLE001 — tracking must never break a run
         log.warning("mlflow logging failed; '%s' completed untracked: %s", run_name, e)
+        return False
