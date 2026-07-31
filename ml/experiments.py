@@ -208,10 +208,13 @@ def compare_classifiers() -> dict:
         f"roc={test_metrics['clf_roc_auc']:.6f} pr={test_metrics['clf_pr_auc']:.6f} "
         f"acc={test_metrics['clf_accuracy']:.4f}"
     )
-    print(
-        "shipped XGBoost headline for reference: roc 0.7389 / pr 0.4652 — adopt a "
-        "challenger only if it BEATS this on test (change the shipped model in ml.train)."
-    )
+    if winner == "xgboost":
+        print("(re-anchors the shipped XGBoost headline, roc 0.7389 / pr 0.4652.)")
+    else:
+        print(
+            "shipped XGBoost headline to beat: roc 0.7389 / pr 0.4652 — adopt this "
+            "challenger only if it BEATS that on test (swap the shipped model in ml.train)."
+        )
     mins = (time.time() - t0) / 60
     n_ok = sum(logged)
     print(f"\ntotal {mins:.1f} min  (MLflow runs logged: {n_ok}/{len(logged)})")
