@@ -48,7 +48,12 @@ tmp*/
 
 # ---- ML artifacts ----
 ml/artifacts/
+# MLflow: local metadata backend (mlruns/ file store or mlflow.db SQLite) and the
+# local artifact fallback (mlartifacts/) used when no GCS_BUCKET is set. Real
+# artifacts go to gs://$GCS_BUCKET/mlflow.
 mlruns/
+mlflow.db
+mlartifacts/
 *.pkl
 *.joblib
 *.model

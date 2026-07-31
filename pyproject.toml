@@ -59,9 +59,11 @@ serve = [
 ml = [
     "scikit-learn>=1.5",
     "xgboost>=3.0",  # >=3 required: UBJ artifacts persist categorical level mappings
+    "lightgbm>=4.5",  # alternative learner for the ml.experiments comparison harness
     "numpy>=1.26",
     "joblib>=1.4",
     "matplotlib>=3.9",
+    "mlflow>=2.16",  # experiment tracking; GCS artifacts via the base google-cloud-storage dep
     "google-cloud-bigquery-storage>=2.24",  # fast reads of the 20M-row mart
 ]
 
