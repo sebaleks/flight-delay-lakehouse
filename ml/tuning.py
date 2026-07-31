@@ -50,6 +50,12 @@ the held-out test the tuned config REGRESSED the classifier (ROC 0.7389->0.7373,
 PR-AUC 0.4652->0.4646: validation-optimism) but IMPROVED the regressor
 (RMSE 49.71->49.26, MAE 19.10->18.99: signal, val and test agree). So the
 classifier keeps its defaults and only the regressor adopts the tuned config.
+NOTE (leakage discipline): BOTH halves of this keep/adopt split were decided on
+the held-out TEST comparison (run_tuning scores the untuned baseline AND the
+tuned winner on test) — a documented, mild cross-run deviation, held-out numbers
+intact but test-INFORMED (docs/leakage_discipline.md rule 7). The rigorous form
+makes the keep/adopt call on the VALIDATION slice with test as a one-time
+confirmation report only; future config decisions should do that.
 
 Run:  uv run --extra ml python -m ml.tuning   (~60 min; loads the full mart)
 """

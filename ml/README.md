@@ -90,9 +90,12 @@ regressor headline. The **classifier keeps its defaults**: the same candidate
 won on validation (+0.0025 PR-AUC) but REGRESSED on the held-out test
 (ROC 0.7389 → 0.7373, PR-AUC 0.4652 → 0.4646) — validation-optimism from the
 summer val-slice distribution (0.260 delay rate vs the test's 0.197) and the
-documented full-window `hist_*` residual, not signal. Keeping the default here
-was itself test-informed (it reads the test regression) — a documented, mild
-cross-run deviation — so **the classifier headline stays 0.7389 / 0.4652**. The
+documented full-window `hist_*` residual, not signal. **Both halves of this
+split** — keep the classifier default, adopt the tuned regressor — were decided
+on the held-out **test** comparison (test-informed; a documented, mild cross-run
+deviation, held-out numbers intact — `docs/leakage_discipline.md` rule 7; the
+rigorous form calls it on validation with test as confirmation), so **the
+classifier headline stays 0.7389 / 0.4652**. The
 hist_* residual is accepted deliberately, but NOT on the discredited
 "common-mode" grounds: a fit-window recompute **measured** the leak is *not*
 common-mode (it shifts val PR-AUC unequally — XGB +0.0008 vs LightGBM +0.0002),

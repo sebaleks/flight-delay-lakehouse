@@ -76,7 +76,10 @@ ARTIFACT_ROOT = Path(__file__).resolve().parent / "artifacts"
 # REGRESSOR — adopts the tuned config. The same candidate improved the
 # regressor on BOTH validation (RMSE 58.30->57.97) and held-out test (RMSE
 # 49.71->49.26, MAE 19.10->18.99); agreement across the boundary makes it
-# signal, not luck. subsample / colsample_bytree < 1 draw from XGBoost's RNG,
+# signal, not luck. Like the classifier keep above, this ADOPT decision was
+# itself test-informed (it reads the test improvement) — the same documented,
+# mild cross-run deviation (docs/leakage_discipline.md rule 7). subsample /
+# colsample_bytree < 1 draw from XGBoost's RNG,
 # so random_state is pinned for bit-identical determinism (the classifier's
 # subsample=1 default draws no RNG and needs no seed — its config is unchanged).
 CLASSIFIER_PARAMS = dict(learning_rate=0.1, max_depth=8)  # n_estimators via xgb_rounds
