@@ -15,7 +15,7 @@ import pandas as pd
 import streamlit as st
 from google.cloud import bigquery
 
-from dashboard.config import fq_view, gcp_project
+from dashboard.config import fq_view, gcp_project, gold_dataset
 
 CACHE_TTL = 3600  # views change only on a dbt rebuild; 1h is ample
 
@@ -63,3 +63,16 @@ def monthly_trend() -> pd.DataFrame:
 
 def route_drilldown() -> pd.DataFrame:
     return load_view("dash_route_drilldown")
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner="Querying BigQuery…")
+def airport_coords() -> pd.DataFrame:
+    """Airport lat/long from the gold ``dim_airport`` (374 rows) — used to place
+    airports on the map. Kept separate from the ``dash_*`` views since it is a
+    dimension, not a pre-aggregated metric view."""
+    sql = (
+        "SELECT airport_key, latitude, longitude "
+        f"FROM `{gcp_project()}.{gold_dataset()}.dim_airport` "
+        "WHERE latitude IS NOT NULL AND longitude IS NOT NULL"
+    )
+    return _client().query(sql).to_dataframe(create_bqstorage_client=True)

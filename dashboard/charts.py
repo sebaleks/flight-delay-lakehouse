@@ -164,6 +164,45 @@ def rate_heatmap(
     return _style(fig, height)
 
 
+def airport_map(
+    df: pd.DataFrame,
+    *,
+    lat: str,
+    lon: str,
+    size: str,
+    color: str,
+    hover_name: str,
+    hover_cols: list[str],
+    title: str,
+    height: int = 560,
+) -> go.Figure:
+    """US bubble map — one marker per airport, sized by traffic, colored by
+    delay rate. Uses scatter_geo (no mapbox token needed)."""
+    fig = px.scatter_geo(
+        df,
+        lat=lat,
+        lon=lon,
+        size=size,
+        color=color,
+        hover_name=hover_name,
+        hover_data=hover_cols,
+        scope="usa",
+        title=title,
+        color_continuous_scale="OrRd",
+        size_max=28,
+    )
+    fig.update_traces(marker=dict(line=dict(width=0.5, color="white"), opacity=0.85))
+    fig.update_geos(
+        showland=True,
+        landcolor="#f2f5f8",
+        showlakes=False,
+        subunitcolor="white",
+        countrycolor="white",
+    )
+    fig.update_coloraxes(colorbar=dict(title="Delay rate", tickformat=".0%"))
+    return _style(fig, height)
+
+
 def scatter_volume_vs_rate(
     df: pd.DataFrame,
     *,

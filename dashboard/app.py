@@ -43,8 +43,15 @@ def _routes() -> None:
     routes.render()
 
 
+def _map() -> None:
+    from dashboard.views import map_view
+
+    map_view.render()
+
+
 PAGES = [
     st.Page(_overview, title="Overview", icon="🏠", default=True),
+    st.Page(_map, title="Delay map", icon="🗺️"),
     st.Page(_reliability, title="Who is reliable?", icon="🏆"),
     st.Page(_timing, title="When do delays happen?", icon="🕒"),
     st.Page(_routes, title="Route drill-down", icon="🛫"),
