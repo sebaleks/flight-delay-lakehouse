@@ -93,6 +93,7 @@ def render() -> None:
             "cancellation_rate": st.column_config.NumberColumn("Cancel rate", format="percent"),
         },
     )
+    ui.download_button(table, "routes_filtered.csv")
     st.caption(
         f"{len(table):,} routes · sorted by traffic. Delay-rate cells shaded red, "
         "cancellation-rate cells shaded purple, by intensity."

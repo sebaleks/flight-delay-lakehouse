@@ -62,6 +62,7 @@ def render() -> None:
             f"{len(elig)} of {len(airports)} airports clear the {min_legs:,}-leg bar. "
             "Rate = delayed arrivals ÷ arrivals with an outcome, at airport grain."
         )
+        ui.download_button(elig.sort_values("arr_del15_rate", ascending=False), "airports.csv")
 
     with right:
         fig = charts.grouped_rate_bar_h(
@@ -75,6 +76,7 @@ def render() -> None:
         )
         st.plotly_chart(fig, use_container_width=True)
         st.caption("Two-letter BTS carrier codes (the source ships no display names).")
+        ui.download_button(carriers.sort_values("arr_del15_rate", ascending=False), "carriers.csv")
 
     st.divider()
 
