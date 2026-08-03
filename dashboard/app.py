@@ -62,6 +62,11 @@ def main() -> None:
     with st.sidebar:
         st.markdown("### ✈️ Flight-Delay Lakehouse")
         st.caption("Gold layer · BigQuery · BTS 2022–2024")
+        from dashboard import data
+
+        fresh = data.gold_freshness()
+        if fresh is not None:
+            st.caption(f"🕒 Data as of {fresh:%b %d, %Y %H:%M} UTC")
     st.navigation(PAGES).run()
 
 
