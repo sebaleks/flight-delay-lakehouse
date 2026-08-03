@@ -30,11 +30,39 @@ def render() -> None:
     )
     st.markdown(f"**Coverage:** {span}  ·  {len(trend)} months")
 
+    # year-over-year deltas: latest full year vs the one before it
+    by_year = metrics.aggregate(trend, "year").sort_values("year")
+    latest, prev = by_year.iloc[-1], by_year.iloc[-2]
+
+    def pp(cur, before):  # percentage-point delta as a signed string
+        return f"{(cur - before) * 100:+.1f} pp"
+
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Total flights", ui.count(overall["n_flights"]))
-    c2.metric("Arrival delay rate (≥15 min)", ui.pct(overall["delay_rate"]))
-    c3.metric("Cancellation rate", ui.pct(overall["cancellation_rate"], digits=2))
-    c4.metric("Avg arrival delay", ui.minutes(overall["avg_arr_delay_minutes"]))
+    c1.metric(
+        "Total flights",
+        ui.count(overall["n_flights"]),
+        f"{latest['n_flights'] - prev['n_flights']:+,.0f} vs {int(prev['year'])}",
+        delta_color="off",
+    )
+    c2.metric(
+        "Arrival delay rate (≥15 min)",
+        ui.pct(overall["delay_rate"]),
+        pp(latest["delay_rate"], prev["delay_rate"]),
+        delta_color="inverse",  # a higher delay rate is worse
+    )
+    c3.metric(
+        "Cancellation rate",
+        ui.pct(overall["cancellation_rate"], digits=2),
+        pp(latest["cancellation_rate"], prev["cancellation_rate"]),
+        delta_color="inverse",
+    )
+    c4.metric(
+        "Avg arrival delay",
+        ui.minutes(overall["avg_arr_delay_minutes"]),
+        f"{latest['avg_arr_delay_minutes'] - prev['avg_arr_delay_minutes']:+.1f} min",
+        delta_color="inverse",
+    )
+    st.caption(f"Δ = {int(latest['year'])} vs {int(prev['year'])} (full-year).")
 
     st.divider()
     st.subheader("What this dashboard answers")
