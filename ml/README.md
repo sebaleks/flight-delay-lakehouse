@@ -2,7 +2,16 @@
 
 Trains two models from the **gold wide-flat feature mart**
 (`flight_delays_gold.ml_flight_features`) — **the same gold layer the
-dashboard consumes; nothing is duplicated or recomputed here.** The mart owns
+dashboard consumes; nothing is duplicated or recomputed here.**
+
+> **Why gold and not silver/bronze**, plus the lineage diagram proving the
+> analytical and ML consumers share one layer without duplication:
+> [`docs/lakehouse_lineage.md`](../docs/lakehouse_lineage.md). Short form: gold
+> is where the leakage boundary becomes a *build artifact* — three dbt tests can
+> diff a built table, but nothing can test a promise made in Python — and it is
+> what lets one definition of `hist_*` serve the dashboard and the model at once.
+
+The mart owns
 the leakage boundary (CLAUDE.md §9): historical rates are training-window-only
 (smoothed toward the global, constant within an entity), weather is the last
 hourly ISD observation **at or before scheduled departure** (3-hour staleness

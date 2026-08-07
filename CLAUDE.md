@@ -64,6 +64,9 @@ Two independent consumption models live in gold:
 
 - **Silver → Gold transforms are BigQuery SQL, orchestrated by dbt Core with the
   `dbt-bigquery` adapter.** No pandas/Python transforms for silver/gold logic.
+  Rationale — measured volumes, monthly cadence, the alternatives rejected, and
+  the conditions under which this choice would be wrong — is in
+  `docs/compute_choice.md`.
 - dbt uses **three separate BigQuery datasets**: `bronze`, `silver`, `gold`
   (names configurable via env vars, defaults `flight_delays_bronze` /
   `_silver` / `_gold`). A `generate_schema_name` macro maps each model's

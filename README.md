@@ -36,6 +36,20 @@ predict delays using only pre-departure information.
         Dagster (orchestration/) drives:  ingest ──► dbt ──► ML   (added last)
 ```
 
+**One gold layer, two consumers.** The analytical branch (`dash_*` → Streamlit)
+and the ML branch (`ml_flight_features` → the two models) both descend from
+`stg_gold__flights` and both read the shared `int_historical_delay_rates` — so
+the dashboard and the model can never disagree on a delay rate. Rendered
+lineage, the train/test boundary overlay, and the defense of *why gold feeds
+ML*: [docs/lakehouse_lineage.md](docs/lakehouse_lineage.md).
+
+**Why BigQuery + dbt and not a cluster.** 33.84 GiB of bronze, a 50.8M-row
+hourly-weather decode, a 20.2M-row ML mart, refreshed **monthly** — a range
+where distributed shuffle is overhead rather than leverage, and where a standing
+cluster would idle ~99.9% of the time. Measured volumes, the alternatives
+rejected, and the conditions under which this choice would be wrong:
+[docs/compute_choice.md](docs/compute_choice.md).
+
 **Current model (held-out Jul–Dec 2024): ROC 0.7389 / PR-AUC 0.4652** —
 three controlled feature generations (daily → hourly-at-departure weather →
 cascade/rotation), with rotation features **restricted to
