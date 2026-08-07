@@ -108,6 +108,23 @@ under 1 MB, and a cached client with a 1-hour TTL prevents re-billing identical
 queries. Pre-aggregate once in dbt, serve thin — a scaling decision made in the
 model layer rather than by adding compute.
 
+The app is served from **Cloud Run** (`flight-delay-dashboard`, us-central1),
+built by Cloud Build on every push to `main` (`Dockerfile`, `cloudbuild.yaml`)
+and authenticating to BigQuery with the runtime service account's ADC — no key
+file, per CLAUDE.md §2. Cloud Run scales to zero between visits, which makes the
+serving tier the **third** component to take the same posture as the other two:
+
+| Component | Runtime | Idle cost |
+|---|---|---|
+| Transforms (bronze→silver→gold) | BigQuery on-demand, per byte scanned | none |
+| Orchestration (monthly refresh) | Cloud Run Job + Cloud Scheduler | none |
+| Dashboard (serving) | Cloud Run service, scale-to-zero | none |
+
+That consistency is the practical payoff of the compute decision: at this data
+volume and cadence, **no part of the lakehouse needs a machine that is always
+on.** A cluster-based transformation tier would have been the only component
+breaking that property, and it would have dominated the bill.
+
 The same instinct produced the one performance rationale that predates this
 document, in [`../dbt/dbt_project.yml`](../dbt/dbt_project.yml): silver models
 are materialized as **tables**, not views, because a silver view would re-scan

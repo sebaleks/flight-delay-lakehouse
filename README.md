@@ -144,7 +144,10 @@ uv run dbt debug --project-dir dbt      # verifies BigQuery + ADC connectivity
 - [x] dbt: gold BI marts + dashboard views
 - [x] ML: time-split, classifier (`ArrDel15`), regressor (`ArrDelayMinutes`)
 - [x] Performance benchmark: `fact_flights` partition/cluster pruning (see `docs/benchmarks/`)
-- [x] Dashboard: Streamlit app over the gold `dash_*` views (see `dashboard/`)
+- [x] Dashboard: Streamlit app over the gold `dash_*` views (see `dashboard/`),
+      live on Cloud Run at
+      <https://flight-delay-dashboard-buboj66t4q-uc.a.run.app> (Cloud Build CD on
+      push to `main`)
 - [x] Dagster: ingest → dbt → ML wired, blocking asset checks, monthly schedule
 - [x] CI: `pr-checks` (gitleaks, dbt parse, Dagster definitions validate, ruff)
 - [x] Feature gen 2: hourly ISD weather at the scheduled departure hour
