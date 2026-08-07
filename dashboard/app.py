@@ -43,8 +43,15 @@ def _routes() -> None:
     routes.render()
 
 
+def _map() -> None:
+    from dashboard.views import map_view
+
+    map_view.render()
+
+
 PAGES = [
     st.Page(_overview, title="Overview", icon="🏠", default=True),
+    st.Page(_map, title="Delay map", icon="🗺️"),
     st.Page(_reliability, title="Who is reliable?", icon="🏆"),
     st.Page(_timing, title="When do delays happen?", icon="🕒"),
     st.Page(_routes, title="Route drill-down", icon="🛫"),
@@ -55,6 +62,11 @@ def main() -> None:
     with st.sidebar:
         st.markdown("### ✈️ Flight-Delay Lakehouse")
         st.caption("Gold layer · BigQuery · BTS 2022–2024")
+        from dashboard import data
+
+        fresh = data.gold_freshness()
+        if fresh is not None:
+            st.caption(f"🕒 Data as of {fresh:%b %d, %Y %H:%M} UTC")
     st.navigation(PAGES).run()
 
 

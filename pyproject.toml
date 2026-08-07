@@ -98,5 +98,5 @@ target-version = "py311"
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.pytest.ini_options]
-testpaths = ["ingestion", "ml", "orchestration"]
+testpaths = ["ingestion", "ml", "orchestration", "dashboard"]
 python_files = ["test_*.py", "*_test.py"]

@@ -1,0 +1,42 @@
+# Continuous deploy: push to main -> build the Dockerfile -> deploy Cloud Run.
+# Created 2026-08: deliberate exception to "CI never touches the cloud"
+# (pr-checks.yml stays credential-free; this deploys the dashboard only).
+#
+# Runs as the compute default SA (has the perms the deploy needs); the Cloud Run
+# service itself keeps its own runtime service account and env vars — `gcloud
+# run deploy --image` only swaps the image.
+
+steps:
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/flight-delay-dashboard:$COMMIT_SHA
+      - .
+
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/flight-delay-dashboard:$COMMIT_SHA
+
+  - id: deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - flight-delay-dashboard
+      - --image
+      - us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/flight-delay-dashboard:$COMMIT_SHA
+      - --region
+      - us-central1
+
+images:
+  - us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/flight-delay-dashboard:$COMMIT_SHA
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+serviceAccount: projects/de-flight-project/serviceAccounts/881765920791-compute@developer.gserviceaccount.com

@@ -15,7 +15,7 @@ import pandas as pd
 import streamlit as st
 from google.cloud import bigquery
 
-from dashboard.config import fq_view, gcp_project
+from dashboard.config import fq_view, gcp_project, gold_dataset
 
 CACHE_TTL = 3600  # views change only on a dbt rebuild; 1h is ample
 
@@ -63,3 +63,33 @@ def monthly_trend() -> pd.DataFrame:
 
 def route_drilldown() -> pd.DataFrame:
     return load_view("dash_route_drilldown")
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def gold_freshness() -> pd.Timestamp | None:
+    """Most recent build time across the gold *tables* (the marts the dashboard
+    reads through views) — i.e. when the last dbt run refreshed the data.
+    Returns a UTC Timestamp, or None if it can't be read."""
+    sql = (
+        "SELECT TIMESTAMP_MILLIS(MAX(last_modified_time)) AS t "
+        f"FROM `{gcp_project()}.{gold_dataset()}.__TABLES__` "
+        "WHERE type = 1"  # 1 = base table, 2 = view
+    )
+    try:
+        rows = list(_client().query(sql))
+        return pd.Timestamp(rows[0].t) if rows and rows[0].t else None
+    except Exception:  # never let a metadata hiccup break the page
+        return None
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner="Querying BigQuery…")
+def airport_coords() -> pd.DataFrame:
+    """Airport lat/long from the gold ``dim_airport`` (374 rows) — used to place
+    airports on the map. Kept separate from the ``dash_*`` views since it is a
+    dimension, not a pre-aggregated metric view."""
+    sql = (
+        "SELECT airport_key, latitude, longitude "
+        f"FROM `{gcp_project()}.{gold_dataset()}.dim_airport` "
+        "WHERE latitude IS NOT NULL AND longitude IS NOT NULL"
+    )
+    return _client().query(sql).to_dataframe(create_bqstorage_client=True)
