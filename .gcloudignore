@@ -1,0 +1,12 @@
+# Upload ONLY what the Docker build needs (gcloud run deploy --source).
+# Whitelist style: ignore everything, then re-include the build inputs.
+/*
+!Dockerfile
+!pyproject.toml
+!uv.lock
+!dashboard/
+!ingestion/
+**/__pycache__/
+# Never upload local secrets or environments (already excluded by /*; explicit for safety).
+.env
+.venv/
