@@ -47,6 +47,7 @@ design removes the channel by construction.
 | `calibration.py` | Stage 4 probability calibration of the classifier (Platt map) |
 | `tracking.py`    | MLflow experiment tracking (GCS-backed artifacts; graceful) |
 | `experiments.py` | Model-comparison harness ('try different models'; e.g. LightGBM) |
+| `replay.py`      | Held-out replay: score never-seen flights, show prediction vs actual |
 
 ## Headline (cascade/rotation RESTRICTED + hourly weather, held-out Jul–Dec 2024)
 
@@ -199,6 +200,51 @@ uv sync --extra ml
 uv run --extra ml python -m ml.audit    # leakage audit alone
 uv run --extra ml python -m ml.train    # audit + train + evaluate
 ```
+
+## Held-out replay: prediction vs what actually happened
+
+`ml/replay.py` is the demo counterpart to the API. The endpoint scores FUTURE
+flights (real forecast, outcome unknowable yet); the replay scores flights from
+the **held-out window**, where the outcome is known — so the prediction can be
+put next to the truth. It scores through the same `coerce_feature_frame` and the
+same Platt map as request serving, so a replayed probability is what the
+endpoint would return for an identical vector.
+
+```
+uv run --extra ml python -m ml.replay --sample 200000 --limit 8
+```
+
+```
+HELD-OUT REPLAY — 200,000 flights the model has never seen
+  base rate     0.1981          ROC-AUC 0.7426 / PR-AUC 0.4697 (sample)
+
+  CALIBRATION — does 'p' behave like a frequency?
+    (0.0, 0.1]   62,061    mean p 0.066    actual 0.073
+    (0.1, 0.2]   63,698           0.144           0.144
+    (0.3, 0.5]   27,094           0.381           0.335
+    (0.7, 1.0]    6,033           0.794           0.750
+
+  TOP DECILE    0.574 actually delayed vs 0.198 base — 2.90x lift
+```
+
+Sample metrics run slightly above the pinned full-test headline (0.7389 /
+0.4652) because they are a 200k deterministic sample, not the 3,561,782-row
+test set — the output labels them as such and the pinned numbers remain the
+ones to quote.
+
+**The caveat to state whenever these numbers are shown.** The replay uses the
+**observed** weather in the mart, not a forecast, because `api.weather.gov`
+serves only the current forecast — the forecast issued before a 2024 flight is
+not retrievable, and routing a past date through `/predict` returns
+`has_origin_weather=false` with all twelve weather features dropped (verified).
+So this is the **test-set regime**: live serving substitutes forecasts for
+observations (gap #1 above) and will be somewhat worse. Quantifying that gap
+would need archived NDFD grids for the test window — a real ingestion job, and
+the natural next experiment.
+
+Nothing here fits, tunes, or selects: it scores the one shipped model and
+reports, which is the diagnostic-report case rule 7 of
+[`../docs/leakage_discipline.md`](../docs/leakage_discipline.md) permits.
 
 ## Experiment tracking (MLflow) + trying different models
 
