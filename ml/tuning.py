@@ -17,15 +17,29 @@ hist_* leakage residual (accepted, noted)
 ------------------------------------------
 The mart's hist_* rates aggregate the WHOLE pre-cutoff training window, so a
 validation slice carved from training inherits rates computed partly from
-validation-period flights — the documented mart residual. We ACCEPT it here
-rather than re-derive rates as-of the validation cutoff because: (1) it is
-common-mode across every candidate, so it does not distort the RELATIVE ranking
-selection depends on; (2) the reported tuned-vs-untuned comparison is on the
-leak-free TEST set (test hist_* never include test-window flights); (3) keeping
-the full-window rates makes the tuning feature distribution identical to what
-the shipped full-window model actually trains on — re-derived shorter-window
-rates would optimize params for a distribution the shipped model never sees;
-(4) re-deriving in Python would violate the SQL-only gold rule (CLAUDE.md §5).
+validation-period flights — the documented mart residual (ml_flight_features.sql
+says a val slice "must re-derive rates as-of that slice"). We accept it here, but
+NOT on the discredited "common-mode" grounds — the leak is NOT common-mode.
+What was MEASURED is the ADJACENT experiments.py XGB-vs-LightGBM family
+selection: an exact fit-window-only recompute of all hist_* shifts validation
+PR-AUC UNEQUALLY (XGB +0.0008 vs LightGBM +0.0002) without flipping that winner
+(docs/leakage_discipline.md rule 10). This tuning.py path — an XGBoost
+hyperparameter grid + a regressor RMSE grid — was NOT separately measured, and
+the classifier grid is a flat plateau (val PR-AUC 0.514-0.518) where a ~0.0006
+unequal shift could in principle reorder near-tied configs: a KNOWN residual,
+not verified-immaterial here. The keep/adopt BINARY is test-confirmed, which
+bounds the risk (classifier kept default on its test regression; regressor
+adopted on val-and-test agreement) — but the exact tuned config was still
+SELECTED from the leaky val grid (the depth-12 regressor won on val RMSE), so
+WHICH config ships is itself a known residual until fit-window rates are
+re-derived. The other reasons to accept it: (2) the reported tuned-vs-untuned
+comparison is on
+the leak-free TEST set (test hist_* never include test-window flights);
+(3) keeping the full-window rates makes the tuning feature distribution
+identical to what the shipped full-window model actually trains on — re-derived
+shorter-window rates would optimize params for a distribution the shipped model
+never sees; (4) re-deriving in Python would violate the SQL-only gold rule
+(CLAUDE.md §5).
 
 Outcome (the split adoption)
 ----------------------------
@@ -36,6 +50,12 @@ the held-out test the tuned config REGRESSED the classifier (ROC 0.7389->0.7373,
 PR-AUC 0.4652->0.4646: validation-optimism) but IMPROVED the regressor
 (RMSE 49.71->49.26, MAE 19.10->18.99: signal, val and test agree). So the
 classifier keeps its defaults and only the regressor adopts the tuned config.
+NOTE (leakage discipline): BOTH halves of this keep/adopt split were decided on
+the held-out TEST comparison (run_tuning scores the untuned baseline AND the
+tuned winner on test) — a documented, mild cross-run deviation, held-out numbers
+intact but test-INFORMED (docs/leakage_discipline.md rule 7). The rigorous form
+makes the keep/adopt call on the VALIDATION slice with test as a one-time
+confirmation report only; future config decisions should do that.
 
 Run:  uv run --extra ml python -m ml.tuning   (~60 min; loads the full mart)
 """

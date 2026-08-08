@@ -2,7 +2,16 @@
 
 Trains two models from the **gold wide-flat feature mart**
 (`flight_delays_gold.ml_flight_features`) — **the same gold layer the
-dashboard consumes; nothing is duplicated or recomputed here.** The mart owns
+dashboard consumes; nothing is duplicated or recomputed here.**
+
+> **Why gold and not silver/bronze**, plus the lineage diagram proving the
+> analytical and ML consumers share one layer without duplication:
+> [`docs/lakehouse_lineage.md`](../docs/lakehouse_lineage.md). Short form: gold
+> is where the leakage boundary becomes a *build artifact* — three dbt tests can
+> diff a built table, but nothing can test a promise made in Python — and it is
+> what lets one definition of `hist_*` serve the dashboard and the model at once.
+
+The mart owns
 the leakage boundary (CLAUDE.md §9): historical rates are training-window-only
 (smoothed toward the global, constant within an entity), weather is the last
 hourly ISD observation **at or before scheduled departure** (3-hour staleness
@@ -38,6 +47,7 @@ design removes the channel by construction.
 | `calibration.py` | Stage 4 probability calibration of the classifier (Platt map) |
 | `tracking.py`    | MLflow experiment tracking (GCS-backed artifacts; graceful) |
 | `experiments.py` | Model-comparison harness ('try different models'; e.g. LightGBM) |
+| `replay.py`      | Held-out replay: score never-seen flights, show prediction vs actual |
 
 ## Headline (cascade/rotation RESTRICTED + hourly weather, held-out Jul–Dec 2024)
 
@@ -90,12 +100,20 @@ regressor headline. The **classifier keeps its defaults**: the same candidate
 won on validation (+0.0025 PR-AUC) but REGRESSED on the held-out test
 (ROC 0.7389 → 0.7373, PR-AUC 0.4652 → 0.4646) — validation-optimism from the
 summer val-slice distribution (0.260 delay rate vs the test's 0.197) and the
-documented full-window `hist_*` residual, not signal. We do not re-select
-against the test set, so **the classifier headline stays 0.7389 / 0.4652**. The
-hist_* residual is accepted deliberately: it is common-mode across candidates
-(does not distort the relative ranking) and the reported deltas are on the
-leak-free test set. Both models retrain bit-identically (the regressor pins
-`random_state`; the classifier's `subsample=1` default is unchanged).
+documented full-window `hist_*` residual, not signal. **Both halves of this
+split** — keep the classifier default, adopt the tuned regressor — were decided
+on the held-out **test** comparison (test-informed; a documented, mild cross-run
+deviation, held-out numbers intact — `docs/leakage_discipline.md` rule 7; the
+rigorous form calls it on validation with test as confirmation), so **the
+classifier headline stays 0.7389 / 0.4652**. The
+hist_* residual is accepted deliberately, but NOT on the discredited
+"common-mode" grounds: a fit-window recompute **measured** the leak is *not*
+common-mode (it shifts val PR-AUC unequally — XGB +0.0008 vs LightGBM +0.0002),
+so it can distort a ranking; it did not flip the current winner, but re-derive
+fit-window rates for any closer/wider selection
+(`docs/leakage_discipline.md` rule 10). The reported tuned-vs-untuned deltas are
+on the leak-free test set. Both models retrain bit-identically (the regressor
+pins `random_state`; the classifier's `subsample=1` default is unchanged).
 
 **Stage 4 — probability calibration (classifier).** `scale_pos_weight` ≈ 3.75
 buys recall on the ~1-in-5 positive rate but inflates the raw scores: they
@@ -183,6 +201,65 @@ uv run --extra ml python -m ml.audit    # leakage audit alone
 uv run --extra ml python -m ml.train    # audit + train + evaluate
 ```
 
+## Held-out replay: prediction vs what actually happened
+
+`ml/replay.py` is the demo counterpart to the API. The endpoint scores FUTURE
+flights (real forecast, outcome unknowable yet); the replay scores flights from
+the **held-out window**, where the outcome is known — so the prediction can be
+put next to the truth. It scores through the same `coerce_feature_frame` and the
+same Platt map as request serving, so a replayed probability is what the
+endpoint would return for an identical vector.
+
+```
+uv run --extra ml python -m ml.replay --sample 200000 --limit 8
+```
+
+```
+HELD-OUT REPLAY — 200,000 flights the model has never seen
+  base rate     0.1981          ROC-AUC 0.7426 / PR-AUC 0.4697 (sample)
+
+  CALIBRATION — does 'p' behave like a frequency?
+    (0.0, 0.1]   62,061    mean p 0.066    actual 0.073
+    (0.1, 0.2]   63,698           0.144           0.144
+    (0.3, 0.5]   27,094           0.381           0.335
+    (0.7, 1.0]    6,033           0.794           0.750
+
+  TOP DECILE    0.574 actually delayed vs 0.198 base — 2.90x lift
+
+  HOW EXTREME IS THE TOP? actual delay rate by cut
+    top 10       ( 0.01%)   0.900        top 10,000   ( 5.00%)   0.696
+    top 100      ( 0.05%)   0.940        top 20,000   (10.00%)   0.574
+    top 1,000    ( 0.50%)   0.871        all                     0.198
+```
+
+**Two example blocks, deliberately.** "Top of the ranking" shows the highest-
+scored flights — nearly all of which were in fact delayed, because that is the
+extreme tail of the ranking and says more about the cut than about the model.
+The cut curve above is printed precisely so that block cannot be read as an
+accuracy claim: at the top 100 the actual rate is 0.94, at the top decile 0.574,
+overall 0.198. "Across the range" is the representative view — a deterministic
+sample from each predicted band, so misses appear next to hits (a flight scored
+0.68 that left on time, one scored 0.43 that arrived 204 minutes late).
+
+Sample metrics run slightly above the pinned full-test headline (0.7389 /
+0.4652) because they are a 200k deterministic sample, not the 3,561,782-row
+test set — the output labels them as such and the pinned numbers remain the
+ones to quote.
+
+**The caveat to state whenever these numbers are shown.** The replay uses the
+**observed** weather in the mart, not a forecast, because `api.weather.gov`
+serves only the current forecast — the forecast issued before a 2024 flight is
+not retrievable, and routing a past date through `/predict` returns
+`has_origin_weather=false` with all twelve weather features dropped (verified).
+So this is the **test-set regime**: live serving substitutes forecasts for
+observations (gap #1 above) and will be somewhat worse. Quantifying that gap
+would need archived NDFD grids for the test window — a real ingestion job, and
+the natural next experiment.
+
+Nothing here fits, tunes, or selects: it scores the one shipped model and
+reports, which is the diagnostic-report case rule 7 of
+[`../docs/leakage_discipline.md`](../docs/leakage_discipline.md) permits.
+
 ## Experiment tracking (MLflow) + trying different models
 
 Every `ml.train` run is logged to **MLflow** (`ml/tracking.py`): hyperparameters,
@@ -206,8 +283,9 @@ uv run --extra ml mlflow ui --backend-store-uri sqlite:///mlflow.db   # compare 
 `FEATURES` (only the learner changes — same pre-departure boundary, CLAUDE.md
 §9) and logs each for an apples-to-apples comparison; the first alternative is
 **LightGBM**. The shipped classifier stays `ml.train`'s XGBoost until an
-alternative **beats it on the held-out test** and is adopted deliberately
-(selected on a validation slice, never re-selected against test — see Stage 3).
+alternative **wins the validation selection** against it (the held-out test is a
+one-time confirmation, NOT the adoption gate — adopting on a test comparison
+re-selects on test; see Stage 3 and `docs/leakage_discipline.md` rule 7).
 **Expectations, stated honestly:** the classifier is on a flat plateau (Stage 3:
 six configs spanned val PR-AUC 0.514–0.518, the tuned candidate *regressed* on
 test), so `0.7389 / 0.4652` is a **signal ceiling** of leak-free pre-departure

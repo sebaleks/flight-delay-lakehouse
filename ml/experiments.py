@@ -12,8 +12,11 @@ test. The harness never SELECTS on the test set, so its held-out numbers are not
 optimistic. Only the LEARNER changes — identical ``is_training_row`` split,
 identical ``FEATURES``, identical pre-departure boundary (CLAUDE.md §9), and the
 same leakage self-audit hard-gate ``ml.train`` runs. The SHIPPED classifier
-stays ``ml.train``'s XGBoost until a challenger genuinely BEATS it on test and
-is adopted deliberately.
+stays ``ml.train``'s XGBoost until a challenger WINS this validation selection
+against it; the held-out test is then reported ONCE as confirmation, not an
+adoption veto (vetoing a validation winner on its test score would itself be
+test-informed selection — a val/test disagreement is a finding to investigate,
+not a silent gate).
 
 Reality check (see ml/README + blog_material.md ch. 5): the classifier sits on
 a flat plateau — Stage 3's six tuned configs spanned val PR-AUC 0.514–0.518 and
@@ -203,17 +206,19 @@ def compare_classifiers() -> dict:
             f"{name:10s} {m['clf_roc_auc']:>10.6f} {m['clf_pr_auc']:>10.6f} "
             f"{m['clf_accuracy']:>10.4f}{star}"
         )
+    print(f"\nrecommendation: ship '{winner}' — it won the VALIDATION selection above.")
     print(
-        f"\nwinner '{winner}' confirmed on HELD-OUT TEST: "
+        "held-out TEST (a ONE-TIME confirmation, NOT a selection/adoption gate): "
         f"roc={test_metrics['clf_roc_auc']:.6f} pr={test_metrics['clf_pr_auc']:.6f} "
         f"acc={test_metrics['clf_accuracy']:.4f}"
     )
     if winner == "xgboost":
-        print("(re-anchors the shipped XGBoost headline, roc 0.7389 / pr 0.4652.)")
+        print("this re-anchors the shipped XGBoost headline (roc 0.7389 / pr 0.4652).")
     else:
         print(
-            "shipped XGBoost headline to beat: roc 0.7389 / pr 0.4652 — adopt this "
-            "challenger only if it BEATS that on test (swap the shipped model in ml.train)."
+            f"'{winner}' beat XGBoost on VALIDATION. Do NOT adopt it merely because a "
+            "test number beats 0.7389 / 0.4652 — that re-selects on test. To ship it, "
+            "wire it into ml.train and re-run this validation selection with it included."
         )
     mins = (time.time() - t0) / 60
     n_ok = sum(logged)
