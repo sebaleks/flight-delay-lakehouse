@@ -150,9 +150,47 @@ def report(scored: pd.DataFrame, limit: int) -> None:
         f"vs {base:.3f} base — {top['label_arr_del15'].mean() / base:.2f}x lift"
     )
 
-    print(f"\n  EXAMPLES ({limit} flights, highest predicted risk first)")
+    # Context for the example block below. Showing the top-N flights and
+    # counting how many were delayed measures the EXTREME TAIL of the ranking,
+    # not the model — the further up the cut, the better it looks. Print the
+    # whole curve so nobody (including us) reads "7 of the top 8 were delayed"
+    # as an accuracy claim.
+    print("\n  HOW EXTREME IS THE TOP? actual delay rate by cut")
+    print("    cut                n        actual rate")
+    cuts = [c for c in (10, 100, 1_000, 10_000, len(scored) // 10) if 0 < c <= len(scored)]
+    for n in sorted(set(cuts)):
+        g = scored.nlargest(n, "delay_probability")
+        pct = 100 * n / len(scored)
+        print(f"    top {n:<8,} ({pct:>5.2f}%) {n:>8,}      {g['label_arr_del15'].mean():>6.3f}")
+    print(f"    all              {len(scored):>8,}      {base:>6.3f}")
+
+    _examples(
+        scored.nlargest(limit, "delay_probability"),
+        f"TOP OF THE RANKING ({limit} highest-scored of {len(scored):,} — the extreme tail,"
+        " NOT a representative sample)",
+    )
+
+    # The honest counterpart: a deterministic walk across the probability
+    # range, so the misses are visible alongside the hits.
+    # sample, not head: the frame arrives in fingerprint order, so a fixed
+    # random_state is reproducible run-to-run while spreading picks across the
+    # whole window. Sorting by IDENTITY and taking head() would be equally
+    # deterministic but would put every example on the earliest date.
+    per_band = max(1, limit // 6)
+    picks = [
+        g.sample(min(per_band, len(g)), random_state=0)
+        for _, g in scored.groupby(bands, observed=True)
+    ]
+    _examples(
+        pd.concat(picks).sort_values("delay_probability", ascending=False),
+        f"ACROSS THE RANGE ({per_band} per predicted band — this is the representative view)",
+    )
+
+
+def _examples(rows: pd.DataFrame, title: str) -> None:
+    print(f"\n  {title}")
     print("    flight                                  p      E[min]   ACTUAL")
-    for _, r in scored.nlargest(limit, "delay_probability").iterrows():
+    for _, r in rows.iterrows():
         actual = "DELAYED" if r["label_arr_del15"] else "on time"
         label = (
             f"{r['carrier']} {r['flight_number']:>4s} {r['origin']}->{r['dest']} "

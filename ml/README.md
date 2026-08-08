@@ -225,7 +225,21 @@ HELD-OUT REPLAY — 200,000 flights the model has never seen
     (0.7, 1.0]    6,033           0.794           0.750
 
   TOP DECILE    0.574 actually delayed vs 0.198 base — 2.90x lift
+
+  HOW EXTREME IS THE TOP? actual delay rate by cut
+    top 10       ( 0.01%)   0.900        top 10,000   ( 5.00%)   0.696
+    top 100      ( 0.05%)   0.940        top 20,000   (10.00%)   0.574
+    top 1,000    ( 0.50%)   0.871        all                     0.198
 ```
+
+**Two example blocks, deliberately.** "Top of the ranking" shows the highest-
+scored flights — nearly all of which were in fact delayed, because that is the
+extreme tail of the ranking and says more about the cut than about the model.
+The cut curve above is printed precisely so that block cannot be read as an
+accuracy claim: at the top 100 the actual rate is 0.94, at the top decile 0.574,
+overall 0.198. "Across the range" is the representative view — a deterministic
+sample from each predicted band, so misses appear next to hits (a flight scored
+0.68 that left on time, one scored 0.43 that arrived 204 minutes late).
 
 Sample metrics run slightly above the pinned full-test headline (0.7389 /
 0.4652) because they are a 200k deterministic sample, not the 3,561,782-row
