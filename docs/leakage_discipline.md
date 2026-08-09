@@ -161,8 +161,8 @@ rules 7 & 10._
 12. **Serving uses only pre-departure inputs and never peeks at test-window
     data.** `ml/serving.py`/`ml/api.py` do not evaluate against a test set, so
     the selection rules (6–8) are N/A; instead: the weather FORECAST at the
-    scheduled departure hour substitutes the observation training used; `hist_*`
-    are read from the mart by explicit name (constant within an entity → the
+    scheduled departure hour substitutes the observation training used;
+    `hist_*` are read by explicit name (constant within an entity → the
     training value); and every serve-time ESTIMATE (departure density, the
     typical-rotation profile) is aggregated **`where is_training_row`** only, so
     the test window is never used to build a serving feature. The assembled
@@ -171,6 +171,25 @@ rules 7 & 10._
     cannot reach a model. Serving relies on the **train-time** audit + the dbt
     standing guards + these schema assertions rather than re-running `run_audit`
     itself (it does no fitting).
+
+    **Where these values now live (updated with the serving preload).** The
+    request path no longer queries `ml_flight_features` at all; it reads three
+    tiny gold tables once at startup. The rule is unchanged — what moved is
+    which artifact enforces it:
+
+    | Value | Enforced in | The predicate |
+    |---|---|---|
+    | `hist_*` (all six grains) | `serving_entity_profile.sql` | `any_value(...)` over the mart — constant within entity, so the training value, pinned by `assert_serving_lookup_entities_constant` |
+    | departure-density estimate | `serving_density_profile.sql:41` | **`where is_training_row`** |
+    | typical-rotation profile | `serving_typical_rotation.sql:45,58` | **`where has_inbound_leg and is_training_row`** |
+
+    So rule 12's `is_training_row` requirement is now a property of the dbt
+    models rather than of a Python query, and it is checked at build time. A
+    new serve-time estimate must carry the same predicate in whichever model
+    computes it. The medians are exact (`percentile_disc`) rather than
+    `approx_quantiles`, which was measured returning four different values for
+    the same median on identical data — a determinism fix, not a boundary
+    change.
 
 ---
 
@@ -182,7 +201,8 @@ rules 7 & 10._
 | **`tuning.py`** (`run_tuning`) | ✅ `:228` | ✅ `carve :229` | ✅ `_search` fits on `fit`, scores `val`; test scoring **deferred** until after val selection `:247` | ⚠️ **WARN** — test scoring is deferred, but `run_tuning` then scores the **untuned baseline (`:257`) AND the tuned winner (`:283`)** on test and the keep/adopt split compares those test scores. So this is **not** "test scored once, winner only" — it is **test-informed config selection for BOTH models** (documented, mild: a two-way keep/adopt per model; rule 7) | ✅ `spw_fit :234` / `spw_full :235` | **WARN** (test-informed split; rule 7) |
 | **`experiments.py`** (`compare_classifiers`) | ✅ `:124` **(fixed, PR #23 `18a78df`)** | ✅ `carve :128`; `split_report :125` | ✅ **(fixed, PR #24)** fit on `fit`, score `val` `:148`; winner = max val PR-AUC `:174` | ⚠️ within-run only the winner is scored on test `:177`, BUT the printed guidance **previously framed** a challenger's **test** score vs `0.7389/0.4652` as the adoption criterion — test-informed (documented, mild); **corrected in this PR** to recommend the val winner with test as confirmation only | ✅ `spw_fit :131` / `spw_full :132` | **PASS** (within-run; guidance fixed in this PR) |
 | **`calibration.py`** (`build_calibration`) | via caller (`train.py` runs the audit) | N/A (receives masks-worth of scores) | N/A — ships the fixed Platt map, no model selection | reads test **only** for reporting + the AUC gate (`:206-224`); **fits on `p_val` only** `:204` | N/A | **PASS** |
-| **`serving.py` / `api.py`** | N/A — no training/fitting | N/A | N/A | N/A | N/A | **PASS** (item 12: pre-departure inputs; estimates `where is_training_row`; schema gate) |
+| **`serving.py` / `api.py`** | N/A — no training/fitting | N/A | N/A | N/A | N/A | **PASS** (item 12: pre-departure inputs; estimates `where is_training_row` — now in the `serving_*` dbt models, not in Python; schema gate) |
+| **`serving_entity_profile` / `_density_profile` / `_typical_rotation`** (dbt) | N/A — no fitting | N/A | N/A | N/A | N/A | **PASS** (item 12: the two ESTIMATE models carry `where is_training_row`; the hist model is a constant-within-entity collapse of training values, guarded by `assert_serving_lookup_entities_constant`) |
 
 **Result: clean within-run, with two documented cross-cutting caveats** (added
 after Codex's re-review of this doc; do not read the table as unqualified PASS):

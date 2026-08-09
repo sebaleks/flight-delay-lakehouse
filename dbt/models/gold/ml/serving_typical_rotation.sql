@@ -20,8 +20,9 @@
 -- EXACT MEDIANS, DELIBERATELY — this is a behaviour FIX, not a port.
 -- The Python this replaces used approx_quantiles(x, 2)[offset(1)], which is
 -- APPROXIMATE and whose result depends on how BigQuery shards the scan. The
--- same query was measured returning three different answers on identical data
--- (inbound_distance 666 / 674 / 663; sched_turnaround 63 vs the exact 64), and
+-- same query was measured returning FOUR different answers on identical data
+-- (inbound_distance 666 / 674 / 663 / 651 against an exact 667;
+-- sched_turnaround 63 against an exact 64), and
 -- because it ran at PROCESS STARTUP, every restart could serve a different
 -- typical profile — i.e. the same context-less request could score differently
 -- across deploys. percentile_disc is exact and deterministic, so the profile is

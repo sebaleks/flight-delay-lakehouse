@@ -55,15 +55,18 @@ from __future__ import annotations
 import logging
 import math
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
+from types import MappingProxyType
 from zoneinfo import ZoneInfo
 
 import joblib
 import pandas as pd
 import xgboost as xgb
+from google.api_core.exceptions import NotFound
 from google.cloud import bigquery
 
 from ingestion.config import require_env
@@ -73,13 +76,16 @@ from ml.train import ARTIFACT_ROOT, LOGREG_INPUT_COLUMNS
 
 log = logging.getLogger("ml.serving")
 
-MART = "ml_flight_features"
 # the serving lookup layer (dbt/models/gold/ml/serving_*.sql) — tiny tables that
-# materialize what the request path used to query per call
+# materialize what the request path used to query per call. Serving no longer
+# reads ml_flight_features at all.
 ENTITY_PROFILE = "serving_entity_profile"
 DENSITY_PROFILE = "serving_density_profile"
 TYPICAL_ROTATION = "serving_typical_rotation"
-HIST_GRAINS = {"route": "route", "carrier": "carrier", "origin": "origin", "dest": "dest"}
+# the four entity grains carrying hist_* triples. A frozenset, not a mapping:
+# the values used to be the mart column name interpolated into the per-grain
+# SQL, and that query is gone — every remaining use is membership.
+HIST_GRAINS = frozenset({"route", "carrier", "origin", "dest"})
 
 
 class SchemaMismatchError(RuntimeError):
@@ -157,6 +163,10 @@ class ServingContext:
     # category absent from the trained encoder instead of routing it to the
     # default direction; see assemble_features
     category_vocab: dict = field(default_factory=dict)
+    # the same vocabulary pre-sorted, because pd.Categorical needs an ORDER and
+    # re-sorting 7,539 routes on every request is pure waste once the
+    # vocabulary is fixed at startup. Set for membership, list for categories.
+    category_order: dict = field(default_factory=dict)
 
 
 def load_models(artifacts_dir: Path | None = None) -> Models:
@@ -219,12 +229,23 @@ def build_context(artifacts_dir: Path | None = None) -> ServingContext:
         .set_index("iata")
     )
     ctx = ServingContext(models=load_models(artifacts_dir), bq=bq, gold=gold, airports=airports)
-    _load_serving_lookups(ctx)
-    ctx.rotation_hist = _load_rotation_hist(ctx)
+    # the rotation levels are RETURNED rather than written onto ctx, so the
+    # dependency between these two loads is a visible argument instead of an
+    # undeclared ordering contract on a mutable field
+    rotation_levels = _load_serving_lookups(ctx)
+    ctx.rotation_hist = _load_rotation_hist(ctx, rotation_levels)
     return ctx
 
 
-def _load_serving_lookups(ctx: ServingContext) -> None:
+def _missing_lookup_error(table: str) -> RuntimeError:
+    return RuntimeError(
+        f"{table} is missing or empty — build the serving lookups BEFORE deploying "
+        "a serving image against this dataset: dbt build -s serving_entity_profile "
+        "serving_density_profile serving_typical_rotation"
+    )
+
+
+def _load_serving_lookups(ctx: ServingContext) -> dict:
     """Read the whole serving lookup layer once, into plain dicts.
 
     Replaces the five per-request queries and the startup vocab union. Those
@@ -234,26 +255,30 @@ def _load_serving_lookups(ctx: ServingContext) -> None:
 
     The category vocabulary falls out of the same table for free: the training
     vocabulary at a level IS the set of entity keys present at that level.
+
+    Returns the two rotation levels (band / position) read on the same pass,
+    for _load_rotation_hist to combine with the typical profile.
     """
-    rows = list(
-        ctx.bq.query(
-            f"select entity_level, entity_key, hist_arr_del15_rate, "
-            f"hist_avg_arr_delay_minutes, hist_n_flights, distance "
-            f"from `{ctx.bq.project}.{ctx.gold}.{ENTITY_PROFILE}`"
-        ).result()
-    )
-    if not rows:
-        raise RuntimeError(
-            f"{ENTITY_PROFILE} is empty — build the serving lookups "
-            "(dbt build -s serving_entity_profile serving_density_profile "
-            "serving_typical_rotation) before serving"
+    try:
+        rows = list(
+            ctx.bq.query(
+                f"select entity_level, entity_key, hist_arr_del15_rate, "
+                f"hist_avg_arr_delay_minutes, hist_n_flights, distance "
+                f"from `{ctx.bq.project}.{ctx.gold}.{ENTITY_PROFILE}`"
+            ).result()
         )
+    except NotFound as exc:
+        # a gold dataset built before the lookup layer existed: surface the
+        # actionable message, not a bare 404 from three frames down
+        raise _missing_lookup_error(ENTITY_PROFILE) from exc
+    if not rows:
+        raise _missing_lookup_error(ENTITY_PROFILE)
     ctx.hist = {g: {} for g in HIST_GRAINS}
     ctx.route_distance = {}
     ctx.category_vocab = {}
     # the two rotation levels live in the same table; collect them on this one
     # pass rather than re-querying it (see _load_rotation_hist)
-    ctx.rotation_hist = {"band": {}, "pos": {}}
+    rotation: dict = {"band": {}, "pos": {}}
     rotation_levels = {"turnaround_band": "band", "rotation_position": "pos"}
     for r in rows:
         level, key = r["entity_level"], r["entity_key"]
@@ -267,8 +292,7 @@ def _load_serving_lookups(ctx: ServingContext) -> None:
             }
             ctx.category_vocab.setdefault(level, set()).add(key)
         elif level in rotation_levels:
-            ctx.rotation_hist[rotation_levels[level]][key] = {
-                "k": key,
+            rotation[rotation_levels[level]][key] = {
                 "rate": r["hist_arr_del15_rate"],
                 "avg_min": r["hist_avg_arr_delay_minutes"],
                 "n": r["hist_n_flights"],
@@ -276,23 +300,34 @@ def _load_serving_lookups(ctx: ServingContext) -> None:
         if level == "route" and r["distance"] is not None:
             ctx.route_distance[key] = float(r["distance"])
     missing = [g for g in HIST_GRAINS if not ctx.hist[g]]
-    missing += [lv for lv, k in rotation_levels.items() if not ctx.rotation_hist[k]]
+    missing += [lv for lv, k in rotation_levels.items() if not rotation[k]]
     if missing:
-        raise RuntimeError(f"{ENTITY_PROFILE} has no rows for level(s) {missing}")
+        raise RuntimeError(f"{ENTITY_PROFILE} has no rows for level(s) {sorted(missing)}")
 
-    ctx.density = {
-        (r["origin"], int(r["crs_dep_hour"]), int(r["day_of_week"])): float(r["density_median"])
-        for r in ctx.bq.query(
-            f"select origin, crs_dep_hour, day_of_week, density_median "
-            f"from `{ctx.bq.project}.{ctx.gold}.{DENSITY_PROFILE}`"
-        ).result()
-    }
+    # pd.Categorical needs the categories in a stable ORDER; sorting the 7,539
+    # routes on every request would be pure waste now that the vocabulary is
+    # fixed at startup. Sort once here, keep the set for the membership test.
+    ctx.category_order = {c: sorted(v) for c, v in ctx.category_vocab.items()}
+
+    try:
+        ctx.density = {
+            (r["origin"], int(r["crs_dep_hour"]), int(r["day_of_week"])): float(r["density_median"])
+            for r in ctx.bq.query(
+                f"select origin, crs_dep_hour, day_of_week, density_median "
+                f"from `{ctx.bq.project}.{ctx.gold}.{DENSITY_PROFILE}`"
+            ).result()
+        }
+    except NotFound as exc:
+        raise _missing_lookup_error(DENSITY_PROFILE) from exc
+    if not ctx.density:
+        raise _missing_lookup_error(DENSITY_PROFILE)
     log.info(
         "serving lookups loaded: hist %s, %d route distances, %d density keys",
         {g: len(v) for g, v in ctx.hist.items()},
         len(ctx.route_distance),
         len(ctx.density),
     )
+    return rotation
 
 
 # Mirrors the band derivation in int_aircraft_rotation.sql (a small necessary
@@ -309,7 +344,7 @@ def _turnaround_band(has_inbound: bool, turnaround: float | None) -> str:
     return "ge_120"
 
 
-def _load_rotation_hist(ctx: ServingContext) -> dict:
+def _load_rotation_hist(ctx: ServingContext, rotation_levels: dict) -> dict:
     """The turnaround-band and rotation-position hist triples, plus the
     'typical rotation profile' (training medians of the rotation schedule
     attributes) used when a caller provides no context.
@@ -331,17 +366,26 @@ def _load_rotation_hist(ctx: ServingContext) -> dict:
     medians — the same epistemic move as the density estimator — and the
     response flags the estimate.
     """
-    # band/pos were collected on the single entity-profile read; only the
-    # one-row median table is left to fetch
-    out: dict = {"band": ctx.rotation_hist["band"], "pos": ctx.rotation_hist["pos"]}
-    med = list(
-        ctx.bq.query(
-            f"select typical_rotation_position as pos, typical_legs_today as legs, "
-            f"typical_sched_turnaround_min as turn, typical_inbound_distance as dist, "
-            f"typical_inbound_crs_elapsed_min as elapsed, typical_density as density "
-            f"from `{ctx.bq.project}.{ctx.gold}.{TYPICAL_ROTATION}`"
-        ).result()
-    )
+    # band/pos were collected on the single entity-profile read and handed in;
+    # only the one-row median table is left to fetch
+    out: dict = {"band": rotation_levels["band"], "pos": rotation_levels["pos"]}
+    try:
+        med = list(
+            ctx.bq.query(
+                f"select typical_rotation_position as pos, typical_legs_today as legs, "
+                f"typical_sched_turnaround_min as turn, typical_inbound_distance as dist, "
+                f"typical_inbound_crs_elapsed_min as elapsed, typical_density as density "
+                f"from `{ctx.bq.project}.{ctx.gold}.{TYPICAL_ROTATION}`"
+            ).result()
+        )
+    except NotFound as exc:
+        raise _missing_lookup_error(TYPICAL_ROTATION) from exc
+    if len(med) > 1:
+        # the model is contractually one row and _load_rotation_hist pins every
+        # context-less prediction to med[0]; more than one row would make that
+        # choice depend on scan order — the exact class of bug the exact-median
+        # change removed. A dbt singular test pins this on the SQL side too.
+        raise RuntimeError(f"{TYPICAL_ROTATION} returned {len(med)} rows; it must be exactly 1")
     if not med or any(
         med[0][k] is None for k in ("pos", "legs", "turn", "dist", "elapsed", "density")
     ):
@@ -478,24 +522,31 @@ def _route_distance(ctx: ServingContext, routes: list[str]) -> dict[str, float]:
 
 
 @lru_cache(maxsize=512)
-def _holiday_flags(d: date) -> dict[str, float]:
+def _holiday_flags(d: date) -> Mapping[str, float]:
     """Holiday flags for one date, using the same library the training calendar
     was generated with.
 
     Cached: a whole-airport batch is one or two distinct dates across hundreds
     of flights, and constructing a 3-year holidays calendar per flight was pure
-    waste. The result is a small immutable-in-practice dict keyed only by the
-    date, so sharing it across calls is safe — callers copy it into their row
-    via dict.update and never mutate it.
+    waste.
+
+    Returns a READ-ONLY mapping, not a dict. Every caller for a given date gets
+    the same object, so a caller that mutated it would silently corrupt the
+    feature for every subsequent request in the process — across all FastAPI
+    threadpool workers, with no traceback. MappingProxyType makes that a
+    TypeError instead of a promise in a docstring. `dict.update(proxy)` works,
+    which is how the one caller consumes it.
     """
     import holidays  # same library the training calendar was generated with
 
     us = holidays.country_holidays("US", years=range(d.year - 1, d.year + 2))
-    return {
-        "is_holiday": float(d in us),
-        "is_day_before_holiday": float(d + timedelta(days=1) in us),
-        "is_day_after_holiday": float(d - timedelta(days=1) in us),
-    }
+    return MappingProxyType(
+        {
+            "is_holiday": float(d in us),
+            "is_day_before_holiday": float(d + timedelta(days=1) in us),
+            "is_day_after_holiday": float(d - timedelta(days=1) in us),
+        }
+    )
 
 
 # NDFD grids refresh roughly hourly: cache each airport's fetched GRID for 30
@@ -650,7 +701,9 @@ def coerce_feature_frame(ctx: ServingContext, x: pd.DataFrame) -> pd.DataFrame:
                     int(unseen.sum()),
                     x.loc[unseen, c].iloc[0],
                 )
-            x[c] = pd.Categorical(x[c], categories=sorted(vocab))
+            # pre-sorted at startup (ctx.category_order); sorted(vocab) here
+            # would re-sort the 7,539-route list on every request
+            x[c] = pd.Categorical(x[c], categories=ctx.category_order[c])
         else:
             x[c] = x[c].astype("category")
     for c in f.NUMERIC_FEATURES:
@@ -729,10 +782,11 @@ def _feature_records(x: pd.DataFrame) -> list[dict]:
     """The per-flight `features` block for a whole frame, built column-wise.
 
     Same output as the previous per-row comprehension, which did one pandas
-    scalar .iloc lookup per feature per flight (51 x N — ~85k of them for a
-    1,300-flight airport batch, and the dominant per-flight cost in the
+    scalar .iloc lookup per feature per flight (51 x N — 76,500 of them for the
+    benchmark's 1,500-flight batch, and the dominant per-flight cost in the
     response path). Here each column is converted once with a vectorised call
-    and the rows are zipped together.
+    and the rows are zipped together. Bulk callers should pass
+    include_features=False and skip this entirely.
 
     NaN -> None is preserved exactly: numeric columns hold np.float32, which is
     NOT a Python float, so the isinstance check this logic originally used
