@@ -130,3 +130,106 @@ models:
                 min_value: 0
               config:
                 severity: warn
+
+  - name: serving_entity_profile
+    description: >
+      SERVING LOOKUP — the constant-within-entity hist values, one row per
+      (entity_level, entity_key), plus route distance on the route rows.
+      Materializes the queries ml/serving.py used to issue PER REQUEST
+      (route/carrier/origin/dest hist + route distance) and per startup
+      (turnaround_band / rotation_position hist), none of which could
+      partition-prune: ~2.7 GB scanned per /predict call became zero.
+      Each level is the SAME any_value(...) group by expression serving ran —
+      the hist values are read from the mart rather than recomputed so the
+      smoothing formula lives once in int_historical_delay_rates and serving
+      reproduces training values byte-for-byte. Rewriting the arithmetic here
+      would recreate the duplication that design removed. The band and
+      rotation_position levels are restricted to rotation_position is not null:
+      swap-shaped links carry NULL rotation columns under the tail-swap
+      restriction and must not define a band. Entities absent here stay NaN at
+      serve time, which IS the training NULL path for an unseen entity.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [entity_level, entity_key]
+    columns:
+      - name: entity_level
+        description: route | carrier | origin | dest | turnaround_band | rotation_position
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [route, carrier, origin, dest, turnaround_band, rotation_position]
+      - name: entity_key
+        description: The entity value at that level (e.g. 'ORD-LAX', 'AA', 'no_inbound', '3').
+        tests: [not_null]
+      - name: hist_arr_del15_rate
+        description: Training-window smoothed delay rate for the entity; constant within it.
+      - name: hist_avg_arr_delay_minutes
+        description: Training-window smoothed average arrival delay for the entity.
+      - name: hist_n_flights
+        description: Training-window flight count behind the rate (the smoothing n).
+      - name: distance
+        description: >
+          Great-circle distance for the route. Populated on entity_level='route'
+          rows ONLY (it folds in the old _route_distance query); NULL elsewhere.
+
+  - name: serving_density_profile
+    description: >
+      SERVING LOOKUP — the origin_dep_density_hour estimate for a caller who
+      supplies none: the TRAINING-window median over DISTINCT SCHEDULE-HOURS
+      for (origin, crs_dep_hour, day_of_week). Two details are load-bearing and
+      carried over verbatim from _density_estimates: the distinct-schedule-hour
+      subquery (a flight-row median would overweight busy banks, biasing the
+      estimate upward) and `where is_training_row` (rule 12 of
+      docs/leakage_discipline.md — a serve-time estimate never touches the test
+      window). Misses fall back to serving_typical_rotation's global median.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [origin, crs_dep_hour, day_of_week]
+    columns:
+      - name: origin
+        tests: [not_null]
+      - name: crs_dep_hour
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 0, max_value: 23}
+      - name: day_of_week
+        description: BTS convention, 1=Monday .. 7=Sunday.
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 1, max_value: 7}
+      - name: density_median
+        description: Median scheduled departures in that origin-hour, training window.
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 1}
+
+  - name: serving_typical_rotation
+    description: >
+      SERVING LOOKUP — the "typical rotation profile", exactly one row: training
+      medians of the rotation schedule attributes, used when a caller supplies
+      no rotation context, plus the last-resort global density median. Medians
+      and not NULL by design: completed flights carry tails, so NaN in these
+      columns sits outside the training distribution and scores badly, and under
+      the tail-swap restriction an all-NULL rotation MEANS "swap-restructured" —
+      nulling a merely-unknown future plan would misclassify it. Serving raises
+      at startup if any value here is NULL rather than scoring every request on
+      the NaN path.
+    columns:
+      - name: typical_rotation_position
+        tests: [not_null]
+      - name: typical_legs_today
+        tests: [not_null]
+      - name: typical_sched_turnaround_min
+        tests: [not_null]
+      - name: typical_inbound_distance
+        tests: [not_null]
+      - name: typical_inbound_crs_elapsed_min
+        tests: [not_null]
+      - name: typical_density
+        tests: [not_null]

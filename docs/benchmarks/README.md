@@ -1,5 +1,10 @@
 # fact_flights partitioning + clustering benchmark
 
+> Second benchmark in this directory:
+> [`serving_preload_benchmark.md`](serving_preload_benchmark.md) — the inference
+> path, 6 BigQuery queries per prediction to 0 (390× latency, $1,315 → $0 per
+> 100k predictions). This one is about the analytics layer's scan volume.
+
 **Claim (blog/resume-ready):** Partitioning `fact_flights` by month and
 clustering by origin airport cut a representative dashboard query — the carrier
 delay ranking for one airport-month (ORD, June 2024) — from **554.0 MB scanned

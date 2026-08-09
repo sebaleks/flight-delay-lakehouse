@@ -301,6 +301,21 @@ uv run --extra ml --extra serve --extra ingestion uvicorn ml.api:app --port 8000
 # GET  /demo/ord-departures?target_date=YYYY-MM-DD   proxy batch demo
 ```
 
+**The serving lookup layer (added with the preload).** `build_context()` reads
+three tiny gold tables once at startup — `serving_entity_profile` (8,316 rows:
+the constant-within-entity `hist_*` values at all six grains, plus route
+distance), `serving_density_profile` (34,979 rows), and
+`serving_typical_rotation` (1 row) — into plain dicts. The request path then
+issues **zero** BigQuery queries. It previously ran 5-6 un-prunable aggregates
+over the 20.2M-row mart per call: 2.31 GB and ~5.1 s for a single flight,
+regardless of batch size. Details, method and the parity evidence:
+[`../docs/benchmarks/serving_preload_benchmark.md`](../docs/benchmarks/serving_preload_benchmark.md).
+That work also fixed a real nondeterminism — the typical rotation profile was
+built with `approx_quantiles`, observed returning four different values for the
+same median, so two processes could score the same context-less request
+differently (largest measured divergence 0.4300 vs 0.4968). The lookups use
+exact `percentile_disc` and rebuild byte-identically.
+
 **Why this is leak-free:** the pre-departure boundary (CLAUDE.md §9) requires
 features knowable before departure. For a FUTURE flight, a weather forecast
 issued now predates departure by construction. Training uses the last
