@@ -19,10 +19,18 @@ lexicographically-newest COMPLETE local run, and having a second, differently
 defined notion of "latest" in the deploy path is how a service ends up serving
 a model nobody chose.
 
-IMMUTABLE. Publishing over an existing prefix is refused. An artifact run is
-identified by its timestamp; if the bytes under that name could change, the run
-id would stop identifying a model, and `/health`'s `artifacts` field — the only
-thing tying a prediction to a model version — would become a lie.
+IMMUTABLE ONCE COMPLETE, RETRYABLE BEFORE THAT. A COMPLETION MARKER
+(`_PUBLISHED.json`) is written LAST, after every file lands. Publishing over a
+prefix that has the marker is refused: an artifact run is identified by its
+timestamp, and if the bytes under that name could change, the run id would stop
+identifying a model and `/health`'s `artifacts` field — the only thing tying a
+prediction to a model version — would become a lie.
+
+A prefix WITHOUT the marker was never a published run; it is the wreckage of an
+interrupted upload, and it is safe to overwrite. Without this distinction a
+single network timeout on the 438 MB booster strands the run forever: the
+existence check refuses to retry, and the build refuses the half-populated
+prefix. (This is not hypothetical — it happened on the first real run.)
 
     uv run --extra ml --extra ingestion python -m ml.publish            # newest complete run
     uv run --extra ml --extra ingestion python -m ml.publish --run 20260730_145241
@@ -32,6 +40,7 @@ thing tying a prediction to a model version — would become a lie.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 from pathlib import Path
@@ -57,6 +66,13 @@ REQUIRED = (
 # and must still be publishable and servable (/calibration and /outcome-mix
 # degrade to available=false), but a warning is worth printing.
 OPTIONAL = ("metrics.json", "exceedance.json")
+# written LAST; its presence is what makes a prefix an immutable published run
+MARKER = "_PUBLISHED.json"
+# 8 MiB chunks turn these into RESUMABLE uploads, and the default 120s deadline
+# is not enough for a 438 MB object on a home connection — the first real run
+# died on exactly that.
+CHUNK_BYTES = 8 * 1024 * 1024
+UPLOAD_TIMEOUT_S = 900
 
 
 def newest_complete_run() -> Path:
@@ -90,12 +106,23 @@ def publish(run: str | None = None, dry_run: bool = False) -> str:
     bucket = client.bucket(bucket_name)
     dest = f"{PREFIX}/{run_dir.name}"
 
-    existing = list(client.list_blobs(bucket, prefix=f"{dest}/", max_results=1))
-    if existing:
+    # COMPLETE (marker present) -> immutable, refuse. PARTIAL (no marker) -> the
+    # remains of a failed upload, safe to overwrite.
+    if bucket.blob(f"{dest}/{MARKER}").exists(client):
         raise SystemExit(
-            f"gs://{bucket_name}/{dest}/ already exists — artifact runs are immutable. "
-            "Publish a new training run rather than overwriting one that a deployed "
-            "image may be pinned to."
+            f"gs://{bucket_name}/{dest}/ is already published — artifact runs are "
+            "immutable. Publish a new training run rather than overwriting one a "
+            "deployed image may be pinned to."
+        )
+    stale = [b.name for b in client.list_blobs(bucket, prefix=f"{dest}/")]
+    if stale:
+        log.warning(
+            "gs://%s/%s/ has %d object(s) but no %s — treating it as an INTERRUPTED "
+            "publish and overwriting. A completed run would have the marker.",
+            bucket_name,
+            dest,
+            len(stale),
+            MARKER,
         )
 
     files = [p for p in sorted(run_dir.iterdir()) if p.is_file()]
@@ -111,10 +138,27 @@ def publish(run: str | None = None, dry_run: bool = False) -> str:
     if dry_run:
         for p in files:
             log.info("  [dry-run] %s (%.1f MB)", p.name, p.stat().st_size / 1e6)
+        log.info("  [dry-run] %s (completion marker, written last)", MARKER)
     else:
         for p in files:
-            bucket.blob(f"{dest}/{p.name}").upload_from_filename(str(p))
+            blob = bucket.blob(f"{dest}/{p.name}")
+            blob.chunk_size = CHUNK_BYTES  # resumable
+            blob.upload_from_filename(str(p), timeout=UPLOAD_TIMEOUT_S)
             log.info("  uploaded %s (%.1f MB)", p.name, p.stat().st_size / 1e6)
+        # LAST, and only now is the prefix a published run
+        bucket.blob(f"{dest}/{MARKER}").upload_from_string(
+            json.dumps(
+                {
+                    "run": run_dir.name,
+                    "files": {p.name: p.stat().st_size for p in files},
+                    "required_present": sorted(REQUIRED),
+                },
+                indent=2,
+            ),
+            content_type="application/json",
+            timeout=UPLOAD_TIMEOUT_S,
+        )
+        log.info("  wrote %s — run is now published and immutable", MARKER)
 
     print(f"\nrun published: {run_dir.name}")
     print("deploy it with:")

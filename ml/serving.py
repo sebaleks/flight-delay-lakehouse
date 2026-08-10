@@ -571,7 +571,9 @@ def _grid_for(ctx: ServingContext, origin: str) -> dict | None:
     return props
 
 
-def _departure_utc(ctx: ServingContext, origin: str, d: date, dep_time: str) -> datetime | None:
+def _departure_utc(
+    ctx: ServingContext, origin: str, d: date, dep_time: str, *, hour_only: bool = False
+) -> datetime | None:
     """The scheduled departure instant in UTC, or None if we cannot place it.
 
     Local wall clock -> UTC via the airport's IANA tz, exactly as the mart's
@@ -579,8 +581,16 @@ def _departure_utc(ctx: ServingContext, origin: str, d: date, dep_time: str) -> 
     a dim_airport row without a timezone — both take the NULL weather path, and
     for both we cannot say whether the flight is in the past.
 
-    Shared by the weather lookup and the prediction-basis report so the two can
-    never disagree about which instant a request refers to.
+    TWO CALLERS, TWO PRECISIONS, and the difference matters:
+
+      hour_only=True  — the WEATHER bucket. Training joins the last hourly
+                        observation at or before the scheduled departure HOUR,
+                        so the grid lookup keeps using the truncated hour.
+      hour_only=False — the PAST/FUTURE decision. Truncating here is a bug: at
+                        17:05 a flight scheduled 17:30 becomes 17:00, comes back
+                        flight_in_past=true, and a consumer UI told to hard-gate
+                        on that value hides a perfectly valid pre-departure
+                        prediction for up to 59 minutes before every departure.
     """
     if origin not in ctx.airports.index:
         return None
@@ -588,16 +598,21 @@ def _departure_utc(ctx: ServingContext, origin: str, d: date, dep_time: str) -> 
     if not isinstance(tz, str) or not tz:
         log.warning("%s has no timezone in dim_airport; NULL weather path", origin)
         return None
-    hour = int(dep_time.split(":")[0])
-    return datetime(d.year, d.month, d.day, hour, tzinfo=ZoneInfo(tz)).astimezone(UTC)
+    hh, mm = dep_time.split(":")
+    minute = 0 if hour_only else int(mm)
+    return datetime(d.year, d.month, d.day, int(hh), minute, tzinfo=ZoneInfo(tz)).astimezone(UTC)
 
 
 def _origin_weather(ctx: ServingContext, origin: str, d: date, dep_time: str) -> dict[str, float]:
     """Forecast at the SCHEDULED departure hour — the training time reference."""
-    dep_utc = _departure_utc(ctx, origin, d, dep_time)
-    if dep_utc is None:
+    # hour_only: the grid lookup keeps the training time reference (the
+    # scheduled departure HOUR). The past check below deliberately uses the
+    # full-precision instant instead — see _departure_utc.
+    dep_utc = _departure_utc(ctx, origin, d, dep_time, hour_only=True)
+    exact = _departure_utc(ctx, origin, d, dep_time)
+    if dep_utc is None or exact is None:
         return dict(NULL_PATH)  # unknown airport / no tz: the training NULL path
-    if dep_utc <= datetime.now(UTC):
+    if exact <= datetime.now(UTC):
         # scoring an already-departed flight is a legitimate debugging use,
         # but the CURRENT grid may postdate departure — the output is not
         # "pre-departure knowable" and must not be presented as such. The
