@@ -14,16 +14,34 @@ file is the *live* state — what shipped, what changed, what is next.
 | | State |
 |---|---|
 | **Phase 0** — serving preload + 2nd benchmark | **merged to `main`** (PR #27) |
-| **Phase 1** — predictor service, evidence endpoints | **built + DEPLOYED**, PR #28 open |
-| **Phase 2** — consumer page | **built**, in PR #28, not yet live |
-| **Phase 4a** — ops capacity page (replay mode) | **not started** — next up |
+| **Phase 1** — predictor service, evidence endpoints | **merged to `main`** (PR #28), DEPLOYED |
+| **Phase 2** — consumer page | **merged to `main`** (PR #28) — verify it went live |
+| **Phase 4a** — ops capacity page (replay mode) | **built**, PR #29 open (all four steps) |
 | Phase 3 (plan mode), 4b (CSV upload) | deferred by decision |
 
-**Open PR: [#28](https://github.com/sebaleks/flight-delay-lakehouse/pull/28)**
-(`feat/predictor-service` → `main`), MERGEABLE. Contains the parity fix, the
-predictor service, and the consumer page.
+**#28 was merged 2026-08-10** (no Codex re-review had appeared; CI green,
+mergeable clean). CD rebuilds the dashboard from `main` on that merge — the
+consumer page should be live; **verify it renders and a prediction
+round-trips** (could not be checked from the remote session that merged it:
+its network policy blocks `run.app`).
 
-**Nothing is blocked.** The next action is either merging #28 or starting 4a.
+**Open PR: [#29](https://github.com/sebaleks/flight-delay-lakehouse/pull/29)**
+(`claude/live-ide-connection-wrm1t7` → `main`), draft. Contains all of Phase
+4a: the `/replay/airport-day` endpoint, `mart_delays_by_airport_hour` +
+`dash_airport_hour_baseline`, the ops capacity page, and the day-typicality
+harness. One commit per step.
+
+**What 4a still needs before it is DEMOABLE (all need GCP, in order):**
+1. Merge #29, `dbt run` (or `--select mart_delays_by_airport_hour+`) so the
+   new mart + skin exist.
+2. **Publish + deploy a new predictor image** — the deployed one predates
+   `/replay/airport-day`. Same run id is fine: same artifacts, new code.
+   (`gcloud builds submit --config cloudbuild.predictor.yaml ...`, §6.)
+3. Run the typicality check before naming a demo date:
+   `uv run --extra ml --extra ingestion python -m ml.day_typicality --origin ORD --date 2024-09-13`
+   — the plan's example date is a CANDIDATE until this says TYPICAL.
+4. The dashboard redeploys itself from `main`; the ops page then works
+   end-to-end. Verify the headline beat renders.
 
 ### Live services
 
@@ -185,12 +203,20 @@ this writing — check for it before merging.**
 
 ## 5. Next actions
 
-1. **Check for the Codex re-review of #28** (command above), address anything.
-2. **Merge #28.** CD rebuilds the dashboard from `main`, and the consumer page
-   goes live. Verify it renders and that a prediction round-trips through the
-   deployed predictor.
-   - Retarget any dependent PR to `main` *before* deleting a base branch.
-3. **Phase 4a — the ops capacity page.** The headline demo beat:
+1. ~~Check for the Codex re-review of #28~~ — done 2026-08-10, none appeared.
+2. ~~Merge #28~~ — **merged 2026-08-10.** Still to do: verify the consumer
+   page went live and a prediction round-trips (see §1).
+3. **Check Codex's review of #29, address findings, merge, then run the
+   demoable checklist in §1** (dbt build → new predictor image → typicality
+   check → verify the ops page live).
+4. ~~Phase 4a — build~~ — **built 2026-08-10**, in PR #29. What was built,
+   per the original spec below: the replay endpoint guards with the run's own
+   split boundary and returns Poisson-binomial summary + per-flight labels;
+   the ops page adds a history-implied climatology line (SUM/SUM baseline ×
+   the day's schedule) so the model visibly has to beat history; downstream
+   exposure counts swap-shaped linkage as ZERO (honest undercount, stated);
+   the typicality verdict is two-tailed — a suspiciously nailed day is as
+   cherry-picked as a missed one. Original spec, for reference:
    > *"On 2024-09-13 the model expected 41 ± 9 delayed departures in ORD's
    > 18:00 bank. There were 44."*
    - `GET /replay/airport-day?origin=ORD&date=YYYY-MM-DD` on the predictor:
