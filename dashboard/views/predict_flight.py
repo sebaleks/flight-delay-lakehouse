@@ -45,9 +45,12 @@ from dashboard.predict_client import (
 
 FORECAST_DAYS = 7
 MAX_DAYS_AHEAD = 330
-# Above this the list stops being scannable and the filters are the answer;
-# rendering 500 rows of widgets is also slow.
-MAX_LISTED = 40
+# How many flights the list will render at once. Each row is five Streamlit
+# widgets, so this is the render-cost ceiling rather than a readability one —
+# 100 keeps a typical filtered board (one airline out of a hub) complete, which
+# is the case that matters: being shown 40 of 87 matches means scrolling to a
+# flight that is not there.
+MAX_LISTED = 100
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -142,26 +145,55 @@ def _pick_flight(url: str, key: str, title: str, origin_default: str, day: date)
         dep_from=early,
         dep_to=late,
     )
-    st.caption(
-        f"**{len(shown)}** of {board['n_flights']} departures match. "
-        "Filters are optional — narrow until you can see your flight."
-    )
     if not shown:
         st.warning("No flights match those filters. Try clearing one.")
         return None
+
+    picked_key = f"{key}_picked"
+    chosen = st.session_state.get(picked_key)
+    chosen_visible = chosen is not None and any(
+        c["carrier"] == chosen["carrier"] and c["flight_number"] == chosen["flight_number"]
+        for c in shown  # the full filtered set, not just the listed page
+    )
+
+    # COLLAPSED: once a flight is chosen the list has done its job, so it folds
+    # down to the one selection. Leaving 100 rows on screen buries the thing the
+    # page is now about, and on a connecting itinerary it buried leg 2's picker
+    # under leg 1's board.
+    if chosen_visible:
+        ui.inject_row_css()
+        st.markdown(
+            f'<div class="fdl-row" style="background:rgba(46,134,171,.10);">'
+            f'<div class="fdl-cell fdl-key"><strong>{chosen["carrier"]} '
+            f"{chosen['flight_number']}</strong></div>"
+            f'<div class="fdl-cell">{names.get(chosen["dest"], chosen["dest"])}</div>'
+            f'<div class="fdl-cell">departs {chosen["dep_time"]}</div>'
+            f'<div class="fdl-cell">arrives {chosen["arr_time"]}</div></div>',
+            unsafe_allow_html=True,
+        )
+        if st.button("Change flight", key=f"{key}_change", type="secondary"):
+            del st.session_state[picked_key]
+            st.rerun()
+        return chosen
+
+    # One honest caption: say whether the list is complete, and only ask for a
+    # narrower filter when it actually is truncated.
+    if len(shown) > MAX_LISTED:
+        st.caption(
+            f"**{len(shown)}** of {board['n_flights']} departures match — showing the "
+            f"first {MAX_LISTED}. Add an airline, a destination or a departure window "
+            "to see the rest."
+        )
+    else:
+        st.caption(f"**{len(shown)}** of {board['n_flights']} departures match.")
     # ALWAYS show a list. Hiding it until the filters are narrow enough left
     # the page with nothing to select from on arrival, which is the opposite of
     # the point — the list IS the interface, the filters just shorten it.
     listed = shown[:MAX_LISTED]
-    if len(shown) > MAX_LISTED:
-        st.caption(
-            f"Showing the first {MAX_LISTED} — add an airline, a destination or "
-            "a departure window to see the rest."
-        )
 
-    # A LIST, not a spreadsheet: exactly len(shown) rows, no grid, no empty
-    # filler. Each row carries its own select button, so picking is one click
-    # rather than hunting a value in a dropdown.
+    # A LIST, not a spreadsheet: no grid, no empty filler. Each row carries its
+    # own select button, so picking is one click rather than hunting a value in
+    # a dropdown.
     ui.inject_row_css()
     st.markdown(
         '<div class="fdl-head"><div class="fdl-cell fdl-key">Flight</div>'
@@ -169,27 +201,16 @@ def _pick_flight(url: str, key: str, title: str, origin_default: str, day: date)
         '<div class="fdl-cell">Arrives</div><div class="fdl-cell fdl-num"></div></div>',
         unsafe_allow_html=True,
     )
-    picked_key = f"{key}_picked"
     for i, f in enumerate(listed):
-        c1, c2, c3, c4, c5 = st.columns([1.1, 2.4, 1, 1, 0.9])
+        c1, c2, c3, c4, c5 = st.columns([1.1, 2.4, 1, 1, 0.9], vertical_alignment="center")
         c1.markdown(f"**{f['carrier']} {f['flight_number']}**")
-        # airline name under the code, so the row reads without a legend
         c2.markdown(names.get(f["dest"], f["dest"]))
         c3.markdown(f["dep_time"])
         c4.markdown(f["arr_time"])
         if c5.button("Select", key=f"{key}_pick_{i}", use_container_width=True):
             st.session_state[picked_key] = f
-
-    chosen = st.session_state.get(picked_key)
-    if chosen and any(
-        c["carrier"] == chosen["carrier"] and c["flight_number"] == chosen["flight_number"]
-        for c in shown  # the full filtered set, not just the listed page
-    ):
-        st.success(
-            f"Selected **{chosen['carrier']} {chosen['flight_number']}** — "
-            f"{chosen['origin']} to {chosen['dest']}, departing {chosen['dep_time']}."
-        )
-        return chosen
+            # rerun immediately so the list collapses in the same interaction
+            st.rerun()
     return None
 
 
