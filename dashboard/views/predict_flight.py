@@ -1,20 +1,28 @@
 """Consumer page: "Will my flight be late?"
 
-The page's job is to give a person a calibrated probability WITHOUT it reading
-as a verdict, and to show the evidence rather than ask for trust. The wording
-rules live in dashboard/uncertainty.py (unit-tested); this module is layout,
-state and error handling.
+PICK, don't type. Choose a departure airport and date, and the page loads that
+airport's departure board; optional filters (airline, destination, flight
+number, departure window) narrow ~900 flights down to yours. Typing every field
+by hand was cumbersome and, worse, produced a WEAKER estimate: a picked flight
+carries its aircraft-rotation context, so it scores with
+rotation_context="provided" instead of the typical-profile fallback.
 
-What is deliberately absent, and why:
-  * no gauge / speedometer — a needle in a red zone is a decision, not a number
-  * no DELAYED / ON TIME badge — the model does not know that
-  * no "expected delay: +23 min" — held-out MAE 18.99 / RMSE 49.26, so the
-    error bar dwarfs the number. The outcome-mix table answers "how late?"
-  * no logreg_baseline_probability — uncalibrated; predict_client drops it
+CONNECTIONS. Tick "I have a connecting flight" and the same picker opens for
+the second leg. The page then answers the question a traveller actually has —
+not "will both be late", but "am I going to miss it". See
+dashboard/flights.connection_risk for why those are different and why the two
+probabilities are never multiplied.
 
-Mode: LIVE. Real NDFD forecast, no ground truth. Past dates are blocked in the
-picker AND refused on the server's own say-so (prediction_basis.flight_in_past),
-because a past-date score looks exactly like a forecast.
+The page's job is to give a calibrated probability WITHOUT it reading as a
+verdict. Deliberately absent: a gauge (a needle in a red zone is a decision
+wearing a probability costume), a DELAYED/ON-TIME badge, an "expected delay
++23 min" point estimate (held-out MAE 18.99 / RMSE 49.26 — the error bar dwarfs
+the number), and the uncalibrated logreg baseline. Wording rules live in
+dashboard/uncertainty.py; the picker and connection math in dashboard/flights.py.
+
+Mode: LIVE forecast, PROXY schedule. Real NDFD weather for the chosen date; the
+departure board is a historical same-weekday board standing in for it, because
+no future airline schedule feed exists here. The page says so.
 """
 
 from __future__ import annotations
@@ -25,35 +33,39 @@ import pandas as pd
 import streamlit as st
 
 from dashboard import charts, data, ui, uncertainty
+from dashboard import flights as fl
 from dashboard.config import predictor_url
 from dashboard.predict_client import (
     PredictorUnavailable,
     calibration,
     outcome_mix,
-    predict_one,
+    predict_selected,
+    schedule_airport_day,
 )
 
-# NDFD publishes ~7 days out. Beyond that a request still works but every
-# weather feature is missing, so the picker allows it and the page says so.
 FORECAST_DAYS = 7
 MAX_DAYS_AHEAD = 330
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def _evidence(url: str) -> tuple[dict, dict]:
-    """The two held-out evidence tables. Cached — they change only on redeploy."""
     return calibration(url), outcome_mix(url)
 
 
-def _airport_options() -> list[str]:
-    """Reuse the already-cached gold view — no new query for the pickers."""
+@st.cache_data(ttl=3600, show_spinner=False)
+def _board(url: str, origin: str, day: date) -> dict:
+    """One airport-day departure board. Cached — the proxy board is stable."""
+    return schedule_airport_day(url, origin=origin, flight_date=day)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _airport_names() -> dict[str, str]:
+    """code -> 'Full Name (CODE)', from the already-cached gold view."""
     df = data.airport_reliability()
-    return sorted(df["airport_key"].dropna().unique().tolist())
-
-
-def _carrier_options() -> list[str]:
-    df = data.carrier_reliability()
-    return sorted(df["carrier_key"].dropna().unique().tolist())
+    return {
+        r["airport_key"]: fl.airport_label(r["airport_key"], r.get("airport_name"), r.get("city"))
+        for _, r in df.iterrows()
+    }
 
 
 def _band_of(p: float, bins: list[dict]) -> dict | None:
@@ -63,33 +75,151 @@ def _band_of(p: float, bins: list[dict]) -> dict | None:
     return None
 
 
+def _pick_flight(url: str, key: str, title: str, origin_default: str, day: date) -> dict | None:
+    """Airport -> board -> filters -> one selected flight. None until chosen."""
+    names = _airport_names()
+    codes = sorted(names)
+    st.markdown(f"##### {title}")
+    origin = st.selectbox(
+        "Departing from",
+        codes,
+        index=codes.index(origin_default) if origin_default in codes else 0,
+        format_func=lambda c: names.get(c, c),
+        key=f"{key}_origin",
+    )
+    try:
+        board = _board(url, origin, day)
+    except PredictorUnavailable as exc:
+        st.error(f"Could not load the departure board. ({exc})")
+        return None
+
+    rows = board["flights"]
+    carriers = sorted({f["carrier"] for f in rows})
+    dests = sorted({f["dest"] for f in rows})
+
+    c1, c2, c3 = st.columns([1, 2, 1])
+    carrier = c1.selectbox("Airline", ["Any", *carriers], key=f"{key}_carrier")
+    dest = c2.selectbox(
+        "Going to",
+        ["Any", *dests],
+        format_func=lambda c: "Any" if c == "Any" else names.get(c, c),
+        key=f"{key}_dest",
+    )
+    number = c3.text_input("Flight no.", key=f"{key}_no", placeholder="e.g. 2842")
+    early, late = st.select_slider(
+        "Departure window",
+        options=[f"{h:02d}:00" for h in range(25)],
+        value=("00:00", "24:00"),
+        key=f"{key}_win",
+    )
+
+    shown = fl.filter_flights(
+        rows,
+        carrier=None if carrier == "Any" else carrier,
+        dest=None if dest == "Any" else dest,
+        flight_number=number or None,
+        dep_from=early,
+        dep_to=late,
+    )
+    st.caption(
+        f"**{len(shown)}** of {board['n_flights']} departures match. "
+        "Filters are optional — narrow until you can see your flight."
+    )
+    if not shown:
+        st.warning("No flights match those filters. Try clearing one.")
+        return None
+    if len(shown) > 300:
+        st.info("Still a long list — pick an airline or a departure window to narrow it.")
+
+    labels = {
+        fl.flight_label(f, names.get(f["dest"], "").rsplit(" (", 1)[0] or None): f for f in shown
+    }
+    chosen = st.selectbox("Your flight", list(labels), key=f"{key}_flight")
+    return labels[chosen]
+
+
 def _render_notes(basis: dict) -> None:
     for level, text in uncertainty.basis_notes(basis):
         {"error": st.error, "warning": st.warning, "info": st.info}[level](text)
+
+
+def _render_one(pred, base: float, mix: dict, cal: dict, heading: str | None = None) -> None:
+    ph = uncertainty.phrase(pred.delay_probability, base)
+    if heading:
+        st.markdown(f"#### {heading}")
+    st.markdown(f"### {ph.headline}")
+    st.markdown(f"**{ph.complement}**  \n{ph.precise} {ph.comparison}")
+    st.plotly_chart(
+        charts.probability_vs_base_rate(
+            pred.delay_probability, base_rate=base, weather_known=pred.has_origin_weather
+        ),
+        use_container_width=True,
+    )
+    st.caption(ph.caveat)
+    _render_notes(pred.basis)
+    _render_outcome_mix(pred.delay_probability, mix)
 
 
 def _render_outcome_mix(p: float, mix: dict) -> None:
     band = _band_of(p, mix.get("bins", []))
     if not band or not band.get("n"):
         return
-    exc = band["exceedance"]
+    e = band["exceedance"]
     st.markdown("##### If it *is* late, how late?")
     st.caption(
-        f"Among **{band['n']:,}** held-out flights we scored between "
+        f"Among **{band['n']:,}** held-out flights scored between "
         f"{band['lo']:.0%} and {band['hi']:.0%} — flights the model never trained on."
     )
     rows = [
-        ("Arrived within 15 minutes", 1 - exc["15"]),
-        ("15 minutes to an hour late", exc["15"] - exc["60"]),
-        ("1 to 2 hours late", exc["60"] - exc["120"]),
-        ("More than 2 hours late", exc["120"]),
+        ("Within 15 minutes", 1 - e["15"]),
+        ("15 min – 1 hour", e["15"] - e["60"]),
+        ("1 – 2 hours", e["60"] - e["120"]),
+        ("Over 2 hours", e["120"]),
     ]
     cols = st.columns(len(rows))
     for col, (label, frac) in zip(cols, rows, strict=True):
         col.metric(label, ui.pct(frac))
+
+
+def _render_connection(leg1, leg2, f1: dict, f2: dict, mix: dict) -> None:
+    risk = fl.connection_risk(
+        f1["arr_time"], f2["dep_time"], mix.get("bins", []), leg1.delay_probability
+    )
+    st.markdown("### Will you make the connection?")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Scheduled layover", f"{risk.layover_min} min")
+    c2.metric(
+        "Slack after changing planes",
+        f"{risk.slack_min} min",
+        help=f"Assumes {fl.DEFAULT_MCT_MIN} minutes to get between gates.",
+    )
+    if risk.probability is None:
+        c3.metric("Risk of misconnecting", "—")
+        st.error(risk.note)
+        return
+    if risk.upper_bound:
+        # long layover, past what we measured: a bound, not an estimate
+        c3.metric("Risk of misconnecting", f"under {ui.pct(risk.probability)}")
+        st.markdown(
+            f"**You have {risk.slack_min} minutes of slack** — more than the "
+            f"{risk.threshold_min} minutes we can measure. The risk is **below "
+            f"{ui.pct(risk.probability)}**, and in practice well below: this is the "
+            "chance of a delay big enough to eat the longest gap we have data for, "
+            "not the chance of missing *this* connection."
+        )
+    else:
+        k, d = uncertainty.natural_frequency(risk.probability)
+        c3.metric("Risk of misconnecting", ui.pct(risk.probability))
+        st.markdown(
+            f"**About {k} in {d}** itineraries like this one miss the connection — that "
+            f"is how often the first leg arrived late enough to eat the slack, measured "
+            f"on held-out flights."
+        )
     st.caption(
-        "These are what actually happened to similar flights — not a prediction "
-        "of how late *your* flight will be."
+        risk.note + ". This is **not** the two probabilities multiplied: the question is whether "
+        "leg 1's arrival delay exceeds your slack, and multiplying would also assume the "
+        "legs are independent — they share weather and the same airline's operations, so "
+        "they are positively correlated."
     )
 
 
@@ -97,20 +227,19 @@ def _render_calibration(p: float, cal: dict) -> None:
     bands = cal.get("reliability")
     if not bands:
         return
-    with st.expander("Should you believe this number? — the held-out evidence", expanded=False):
+    with st.expander("Should you believe this number? — the held-out evidence"):
         st.markdown(
             f"On **{cal['n_test']:,}** flights the model had never seen "
-            f"(from {cal['test_start']}), we compared what it said against what "
-            "happened. Bars on the dotted line mean the probabilities are honest."
+            f"(from {cal['test_start']}), we compared what it said against what happened. "
+            "Bars on the dotted line mean the probabilities are honest."
         )
-        df = pd.DataFrame(bands)
-        band = _band_of(p, [{**b, "n": b["n"]} for b in bands])
-        fig = charts.reliability(df, highlight_lo=band["lo"] if band else None)
-        st.plotly_chart(fig, use_container_width=True)
+        band = _band_of(p, bands)
+        st.plotly_chart(
+            charts.reliability(pd.DataFrame(bands), highlight_lo=band["lo"] if band else None),
+            use_container_width=True,
+        )
         st.caption(
-            f"Your flight's band is highlighted. Expected calibration error "
-            f"{cal['ece']:.3f} — on average the stated probability is within "
-            f"{cal['ece']:.1%} of the real frequency."
+            f"Your flight's band is highlighted. Expected calibration error {cal['ece']:.3f}."
         )
 
 
@@ -118,21 +247,21 @@ def _render_model_card(cal: dict) -> None:
     with st.expander("About this model"):
         st.markdown(
             f"""
-- **Held-out performance** (Jul–Dec 2024, {cal.get("n_test", 0):,} flights the
-  model never saw): ROC-AUC **{cal.get("roc_auc", float("nan")):.4f}**, PR-AUC
+- **Held-out performance** ({cal.get("n_test", 0):,} flights the model never saw,
+  Jul–Dec 2024): ROC-AUC **{cal.get("roc_auc", float("nan")):.4f}**, PR-AUC
   **{cal.get("pr_auc", float("nan")):.4f}** against a base rate of
-  **{cal.get("base_rate", float("nan")):.4f}** — about **2.4x** better than
-  guessing at the population rate.
+  **{cal.get("base_rate", float("nan")):.4f}**.
 - **Probabilities are calibrated** (`{cal.get("calibration_method")}`), so "30%"
-  means about 30 in 100, not merely "riskier than average".
-- **Only pre-departure information is used.** No realised departure delay, no
-  actual times, nothing about how the aircraft's earlier legs actually went —
-  only what is knowable before your flight leaves.
-- **Trained through June 2024**, evaluated on July–December 2024.
-- **One honest gap:** those numbers were measured against *observed* weather.
-  Live scoring substitutes a *forecast* for the same hour, so real-world
-  performance is somewhat worse than the figures above.
-- **We don't store your search.** The app has no write path of any kind.
+  means about 30 in 100.
+- **Only pre-departure information is used** — no realised departure delay, no
+  actual times, nothing about how the aircraft's earlier legs actually went.
+- **The schedule is a proxy.** No future airline schedule feed exists here, so
+  the departure board is a historical same-weekday board for the airport. The
+  weather forecast is real and live.
+- **One honest gap:** the numbers above were measured against *observed*
+  weather; live scoring substitutes a *forecast*, so real performance is
+  somewhat worse.
+- **We don't store your search.**
 """
         )
 
@@ -143,102 +272,70 @@ def render() -> None:
     if not url:
         st.info(
             "The prediction service is not configured for this deployment "
-            "(`PREDICTOR_URL` is unset), so this page is disabled. The "
-            "analytics pages are unaffected."
+            "(`PREDICTOR_URL` is unset), so this page is disabled. The analytics "
+            "pages are unaffected."
         )
         return
 
     st.caption(
-        "A calibrated probability for one flight, from a model that uses only "
-        "information knowable before departure."
+        "Pick your flight from the departure board and get a calibrated "
+        "probability, from a model that uses only what is knowable before departure."
     )
 
-    with st.form("flight"):
-        c1, c2, c3 = st.columns(3)
-        airports = _airport_options()
-        origin = c1.selectbox(
-            "From", airports, index=airports.index("ORD") if "ORD" in airports else 0
-        )
-        dest = c2.selectbox("To", airports, index=airports.index("LAX") if "LAX" in airports else 1)
-        carriers = _carrier_options()
-        carrier = c3.selectbox(
-            "Airline", carriers, index=carriers.index("UA") if "UA" in carriers else 0
-        )
-        c4, c5, c6 = st.columns(3)
-        today = date.today()
-        flight_date = c4.date_input(
-            "Date",
-            value=today + timedelta(days=2),
-            # past dates are not selectable: a past-date score looks exactly
-            # like a forecast, and the server flags but still returns one
-            min_value=today,
-            max_value=today + timedelta(days=MAX_DAYS_AHEAD),
-        )
-        dep_time = c5.time_input("Scheduled departure", value=None, step=300)
-        arr_time = c6.time_input("Scheduled arrival", value=None, step=300)
-        submitted = st.form_submit_button("Estimate", type="primary")
+    today = date.today()
+    day = st.date_input(
+        "Travel date",
+        value=today + timedelta(days=2),
+        min_value=today,
+        max_value=today + timedelta(days=MAX_DAYS_AHEAD),
+    )
 
-    if not submitted:
-        st.caption(
-            "Enter a flight above. Everything the estimate uses — schedule, route "
-            "history, the weather forecast for your departure hour — is public "
-            "information available before departure."
-        )
+    leg1 = _pick_flight(url, "l1", "Your flight", "ORD", day)
+    connecting = st.checkbox("I have a connecting flight")
+    leg2 = None
+    if connecting and leg1:
+        st.divider()
+        leg2 = _pick_flight(url, "l2", "Connecting flight", leg1["dest"], day)
+        if leg2 and leg2["origin"] != leg1["dest"]:
+            st.warning(
+                f"Your first flight lands at {leg1['dest']} but the connection departs "
+                f"{leg2['origin']}. Change the connecting airport to {leg1['dest']}."
+            )
+            leg2 = None
+
+    if not leg1 or (connecting and not leg2):
+        st.caption("Choose a flight above to see its estimate.")
         return
-    if origin == dest:
-        st.error("Origin and destination must differ.")
-        return
-    if dep_time is None or arr_time is None:
-        st.error("Please give both scheduled times, as printed on your ticket.")
+    if not st.button("Estimate", type="primary"):
         return
 
-    days_out = (flight_date - date.today()).days
     with st.spinner(
-        "Waking the model and fetching the forecast — the first request after a "
-        "quiet period takes about 30 seconds, because nothing is left running "
-        "when nobody is using it."
+        "Waking the model and fetching the forecast — the first request after a quiet "
+        "period takes about 30 seconds, because nothing is left running when nobody is "
+        "using it."
     ):
         try:
-            pred = predict_one(
-                url,
-                origin=origin,
-                dest=dest,
-                carrier=carrier,
-                flight_date=flight_date,
-                dep_time=dep_time.strftime("%H:%M"),
-                arr_time=arr_time.strftime("%H:%M"),
-            )
+            p1 = predict_selected(url, leg1, day)
+            p2 = predict_selected(url, leg2, day) if leg2 else None
             cal, mix = _evidence(url)
         except PredictorUnavailable as exc:
-            st.error(
-                f"The prediction service is unavailable right now, so there is no "
-                f"estimate to show. ({exc})"
-            )
+            st.error(f"The prediction service is unavailable right now. ({exc})")
             return
 
-    # the server's own verdict wins over the picker: never render a past-date
-    # score as if it were a forecast
-    if pred.flight_in_past:
-        _render_notes(pred.basis)
+    if p1.flight_in_past or (p2 and p2.flight_in_past):
+        _render_notes(p1.basis)
         return
 
     base = cal.get("base_rate") or uncertainty.BASE_RATE
-    ph = uncertainty.phrase(pred.delay_probability, base)
+    st.divider()
+    if p2:
+        _render_connection(p1, p2, leg1, leg2, mix)
+        st.divider()
+        _render_one(p1, base, mix, cal, heading=f"Leg 1 — {leg1['origin']} → {leg1['dest']}")
+        st.divider()
+        _render_one(p2, base, mix, cal, heading=f"Leg 2 — {leg2['origin']} → {leg2['dest']}")
+    else:
+        _render_one(p1, base, mix, cal)
 
-    st.markdown(f"### {ph.headline}")
-    st.markdown(f"**{ph.complement}**  \n{ph.precise} {ph.comparison}")
-    st.plotly_chart(
-        charts.probability_vs_base_rate(
-            pred.delay_probability, base_rate=base, weather_known=pred.has_origin_weather
-        ),
-        use_container_width=True,
-    )
-    st.caption(ph.caveat)
-
-    _render_notes(pred.basis)
-    if days_out > FORECAST_DAYS and pred.has_origin_weather:
-        st.caption(f"Forecast weather was available even {days_out} days out.")
-
-    _render_outcome_mix(pred.delay_probability, mix)
-    _render_calibration(pred.delay_probability, cal)
+    _render_calibration(p1.delay_probability, cal)
     _render_model_card(cal)

@@ -61,15 +61,27 @@ def _ops_capacity() -> None:
     ops_capacity.render()
 
 
-PAGES = [
-    st.Page(_overview, title="Overview", icon="🏠", default=True),
-    st.Page(_predict_flight, title="Will my flight be late?", icon="🔮"),
-    st.Page(_ops_capacity, title="Ops capacity replay", icon="📡"),
-    st.Page(_map, title="Delay map", icon="🗺️"),
-    st.Page(_reliability, title="Who is reliable?", icon="🏆"),
-    st.Page(_timing, title="When do delays happen?", icon="🕒"),
-    st.Page(_routes, title="Route drill-down", icon="🛫"),
-]
+# GROUPED BY AUDIENCE, not by feature. The two prediction pages answer very
+# different questions for very different people — a traveller asking about one
+# flight, and an operations planner sizing a whole airport-day — and the
+# honesty rules differ accordingly (a traveller must never see a point estimate
+# of minutes; a planner needs the summed expectation). Labelled sections keep a
+# viewer from reading an ops number as consumer advice, or vice versa.
+PAGES = {
+    "For travellers": [
+        st.Page(_predict_flight, title="Will my flight be late?", icon="🔮", default=True),
+    ],
+    "For airlines & airports": [
+        st.Page(_ops_capacity, title="Ops capacity replay", icon="📡"),
+    ],
+    "Explore the data": [
+        st.Page(_overview, title="Overview", icon="🏠"),
+        st.Page(_map, title="Delay map", icon="🗺️"),
+        st.Page(_reliability, title="Who is reliable?", icon="🏆"),
+        st.Page(_timing, title="When do delays happen?", icon="🕒"),
+        st.Page(_routes, title="Route drill-down", icon="🛫"),
+    ],
+}
 
 
 def main() -> None:

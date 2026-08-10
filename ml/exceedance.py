@@ -48,7 +48,11 @@ OUTPUT_NAME = "exceedance.json"
 # reproduce the calibration table's frac_pos, a free consistency check); 60 and
 # 120 are the thresholds that matter commercially — missed connections and the
 # territory where compensation schemes start to bite.
-THRESHOLDS_MIN = (15, 30, 60, 90, 120)
+# 180 and 240 exist for CONNECTION risk: a 3-4 hour layover is common, and
+# without them the largest measurable threshold is 120 min, so a comfortable
+# 209-minute slack gets scored against P(>=120) and reads as a ~25% risk.
+# Beyond the top threshold the consumer page can only report an upper bound.
+THRESHOLDS_MIN = (15, 30, 60, 90, 120, 180, 240)
 N_BINS = 10
 
 

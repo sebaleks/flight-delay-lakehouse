@@ -295,6 +295,118 @@ def replay_airport_day(
     )
 
 
+def _resolve_origin_and_target(
+    ctx: ServingContext, origin: str, target_date: date | None
+) -> tuple[str, date, date]:
+    """(origin, target date, proxy day) for the schedule endpoints.
+
+    Shared so the schedule picker and the batch demo can never disagree about
+    WHICH historical day is standing in for the target — a picker showing one
+    day's flights while the scorer used another would be a silent mismatch.
+    """
+    origin = origin.upper()
+    if origin not in ctx.airports.index:
+        raise HTTPException(404, f"unknown origin {origin!r}")
+    tz = ctx.airports.loc[origin]["tz"]
+    target = target_date or (
+        datetime.now(ZoneInfo(tz if isinstance(tz, str) and tz else "UTC")).date()
+        + timedelta(days=1)
+    )
+    proxy_rows = list(
+        ctx.bq.query(
+            f"select max(flight_date) as proxy_day "
+            f"from `{ctx.bq.project}.{ctx.gold}.ml_flight_features` "
+            f"where origin = @origin "
+            f"and extract(dayofweek from flight_date) = extract(dayofweek from @target)",
+            job_config=bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("origin", "STRING", origin),
+                    bigquery.ScalarQueryParameter("target", "DATE", target),
+                ]
+            ),
+        ).result()
+    )
+    proxy_day = proxy_rows[0]["proxy_day"] if proxy_rows else None
+    if proxy_day is None:
+        raise HTTPException(404, f"no in-mart schedule for {origin} on that weekday")
+    return origin, target, proxy_day
+
+
+@app.get("/schedule/airport-day")
+def schedule_airport_day(origin: str = "ORD", target_date: date | None = None) -> dict:
+    """The departure board for one airport-day — SCHEDULE ONLY, no scoring.
+
+    Exists so a flight PICKER does not have to bulk-score ~900 flights just to
+    draw a list. Returns in about a second; the caller then scores only the one
+    or two flights the traveller actually selects.
+
+    Each row is a real flight (carrier + flight number + destination + times),
+    and carries the ROTATION context from the proxy day. Passing that back to
+    /predict is what makes a picked flight score with
+    rotation_context="provided" — a sharper estimate than a hand-typed flight,
+    which can only get the typical-profile fallback.
+
+    HONEST PROXY, same as /demo/airport-departures: no future airline schedule
+    feed exists here, so a historical same-weekday board stands in for the
+    target date. `proxy_day` is returned so a UI can say so out loud.
+    """
+    ctx = _ctx_or_503()
+    origin, target, proxy_day = _resolve_origin_and_target(ctx, origin, target_date)
+    rows = ctx.bq.query(
+        f"select carrier, cast(flight_number as string) as flight_number, dest, "
+        f"format_time('%H:%M', crs_dep_time) as dep_time, "
+        f"cast(crs_arr_hour as int64) as arr_hour, "
+        f"any_value(distance) as distance, "
+        f"any_value(struct(rotation_position, legs_today, sched_turnaround_min, "
+        f"inbound_distance, inbound_crs_elapsed_min, origin_dep_density_hour)) as rot "
+        f"from `{ctx.bq.project}.{ctx.gold}.ml_flight_features` "
+        f"where origin = @origin and flight_date = @d "
+        f"group by carrier, flight_number, dest, dep_time, arr_hour "
+        f"order by dep_time, carrier, flight_number",
+        job_config=bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("origin", "STRING", origin),
+                bigquery.ScalarQueryParameter("d", "DATE", proxy_day),
+            ]
+        ),
+    ).result()
+
+    def _opt(v, cast=float):
+        return cast(v) if v is not None else None
+
+    flights = [
+        {
+            "carrier": r["carrier"],
+            "flight_number": r["flight_number"],
+            "origin": origin,
+            "dest": r["dest"],
+            "dep_time": r["dep_time"],
+            # the mart keeps only the scheduled arrival HOUR; :30 is the same
+            # convention /demo/airport-departures uses, and only the hour is a
+            # model input anyway
+            "arr_time": f"{int(r['arr_hour']):02d}:30",
+            "distance": _opt(r["distance"]),
+            "rotation_position": _opt(r["rot"]["rotation_position"], int),
+            "legs_today": _opt(r["rot"]["legs_today"], int),
+            "sched_turnaround_min": _opt(r["rot"]["sched_turnaround_min"]),
+            "inbound_distance": _opt(r["rot"]["inbound_distance"]),
+            "inbound_crs_elapsed_min": _opt(r["rot"]["inbound_crs_elapsed_min"]),
+            "origin_dep_density_hour": _opt(r["rot"]["origin_dep_density_hour"]),
+        }
+        for r in rows
+    ]
+    if not flights:
+        raise HTTPException(404, f"no proxy schedule for {origin} on {proxy_day}")
+    return {
+        "origin": origin,
+        "date": target.isoformat(),
+        "proxy_day": proxy_day.isoformat(),
+        "n_flights": len(flights),
+        "schedule_source": "historical_same_weekday_proxy",
+        "flights": flights,
+    }
+
+
 @app.get("/demo/airport-departures")
 @app.get("/demo/ord-departures")  # original path, kept so existing callers work
 def demo_airport(origin: str = "ORD", target_date: date | None = None) -> list[dict]:

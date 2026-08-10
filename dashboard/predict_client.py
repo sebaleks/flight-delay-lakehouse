@@ -182,6 +182,75 @@ def replay_airport_day(
     return raw
 
 
+def schedule_airport_day(
+    base_url: str, *, origin: str, flight_date: date, timeout: float = COLD_START_TIMEOUT_S
+) -> dict:
+    """The departure board for one airport-day — schedule only, no scoring.
+
+    Backs the flight picker. Scoring the whole board just to draw a list would
+    cost seconds for nothing; only the selected flight(s) get scored.
+    """
+    return _get(
+        base_url,
+        f"/schedule/airport-day?origin={origin}&target_date={flight_date.isoformat()}",
+        timeout,
+    )
+
+
+def predict_selected(
+    base_url: str, flight: dict, flight_date: date, timeout: float = COLD_START_TIMEOUT_S
+) -> ConsumerPrediction:
+    """Score a flight PICKED from the schedule, carrying its rotation context.
+
+    A picked flight knows which leg of the aircraft's day it is, so it scores
+    with rotation_context="provided" — sharper than a hand-typed flight, which
+    can only get the typical-profile fallback. The rotation block is
+    complete-or-absent at the API, so it is only sent when the position is
+    known, and the inbound triple only when all three are present.
+    """
+    payload = {
+        "origin": flight["origin"],
+        "dest": flight["dest"],
+        "carrier": flight["carrier"],
+        "flight_date": flight_date.isoformat(),
+        "dep_time": flight["dep_time"],
+        "arr_time": flight["arr_time"],
+    }
+    if flight.get("distance"):
+        payload["distance"] = flight["distance"]
+    pos = flight.get("rotation_position")
+    legs = flight.get("legs_today")
+    if pos and legs:
+        payload["rotation_position"] = int(pos)
+        payload["legs_today"] = max(int(legs), int(pos))
+        inbound = (
+            flight.get("sched_turnaround_min"),
+            flight.get("inbound_distance"),
+            flight.get("inbound_crs_elapsed_min"),
+        )
+        if all(v is not None for v in inbound):
+            payload["sched_turnaround_min"] = float(inbound[0])
+            payload["inbound_distance"] = float(inbound[1])
+            payload["inbound_crs_elapsed_min"] = float(inbound[2])
+        elif int(pos) >= 2:
+            # the API requires the inbound triple at position >= 2; without it
+            # the whole rotation block must be dropped rather than 422
+            payload.pop("rotation_position")
+            payload.pop("legs_today")
+    if flight.get("origin_dep_density_hour"):
+        payload["origin_dep_density_hour"] = float(flight["origin_dep_density_hour"])
+
+    raw = _post(base_url, "/predict", payload, timeout)
+    if not isinstance(raw, dict):
+        raise PredictorUnavailable(f"unexpected response shape: {type(raw).__name__}")
+    return ConsumerPrediction(
+        delay_probability=float(raw["delay_probability"]),
+        probability_calibration=str(raw.get("probability_calibration", "unknown")),
+        has_origin_weather=bool(raw.get("has_origin_weather", False)),
+        basis=dict(raw.get("prediction_basis") or {}),
+    )
+
+
 def calibration(base_url: str, timeout: float = COLD_START_TIMEOUT_S) -> dict:
     """The held-out reliability table — the evidence behind the probability."""
     return _get(base_url, "/calibration", timeout)
