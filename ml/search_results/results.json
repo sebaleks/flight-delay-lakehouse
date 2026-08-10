@@ -1,0 +1,219 @@
+{
+  "meta": {
+    "val_start": "2024-05-06",
+    "recompute_check": {
+      "compared": 8144,
+      "max_abs_rate_diff": 4.718447854656915e-16,
+      "max_abs_avg_diff": 3.552713678800501e-14,
+      "n_exact_match": 8144
+    },
+    "n_fit_search": 120000,
+    "n_val": 60000,
+    "scale_pos_weight": 3.7990401919616077,
+    "hist_rederived_on_fit_window": true,
+    "test_set_touched": false,
+    "elapsed_min": 6.2
+  },
+  "trials": [
+    {
+      "family": "catboost",
+      "params": {
+        "depth": 6,
+        "learning_rate": 0.1,
+        "l2_leaf_reg": 3,
+        "iterations": 600
+      },
+      "val_roc_auc": 0.7164383808226714,
+      "val_pr_auc": 0.49975856104159777,
+      "fit_seconds": 10.9,
+      "ok": true
+    },
+    {
+      "family": "catboost",
+      "params": {
+        "depth": 8,
+        "learning_rate": 0.1,
+        "l2_leaf_reg": 3,
+        "iterations": 600
+      },
+      "val_roc_auc": 0.713064703116108,
+      "val_pr_auc": 0.49736054397196855,
+      "fit_seconds": 15.0,
+      "ok": true
+    },
+    {
+      "family": "catboost",
+      "params": {
+        "depth": 8,
+        "learning_rate": 0.05,
+        "l2_leaf_reg": 6,
+        "iterations": 600
+      },
+      "val_roc_auc": 0.7194647031880695,
+      "val_pr_auc": 0.5029520451302101,
+      "fit_seconds": 15.1,
+      "ok": true
+    },
+    {
+      "family": "catboost",
+      "params": {
+        "depth": 10,
+        "learning_rate": 0.05,
+        "l2_leaf_reg": 6,
+        "iterations": 600
+      },
+      "val_roc_auc": 0.7156383900627701,
+      "val_pr_auc": 0.4988096009522023,
+      "fit_seconds": 23.4,
+      "ok": true
+    },
+    {
+      "family": "catboost",
+      "params": {
+        "depth": 6,
+        "learning_rate": 0.05,
+        "l2_leaf_reg": 1,
+        "iterations": 600
+      },
+      "val_roc_auc": 0.7188396965785945,
+      "val_pr_auc": 0.5025873906773761,
+      "fit_seconds": 10.9,
+      "ok": true
+    },
+    {
+      "family": "hist_gbdt",
+      "params": {
+        "max_depth": null,
+        "learning_rate": 0.1,
+        "max_iter": 400,
+        "min_samples_leaf": 20
+      },
+      "ok": false,
+      "error": "Categorical feature 'origin' is expected to have a cardinality <= 255 but actually has a cardinality of 364."
+    },
+    {
+      "family": "hist_gbdt",
+      "params": {
+        "max_depth": 8,
+        "learning_rate": 0.1,
+        "max_iter": 400,
+        "min_samples_leaf": 20
+      },
+      "ok": false,
+      "error": "Categorical feature 'origin' is expected to have a cardinality <= 255 but actually has a cardinality of 364."
+    },
+    {
+      "family": "hist_gbdt",
+      "params": {
+        "max_depth": 12,
+        "learning_rate": 0.05,
+        "max_iter": 400,
+        "min_samples_leaf": 50
+      },
+      "ok": false,
+      "error": "Categorical feature 'origin' is expected to have a cardinality <= 255 but actually has a cardinality of 364."
+    },
+    {
+      "family": "hist_gbdt",
+      "params": {
+        "max_depth": null,
+        "learning_rate": 0.05,
+        "max_iter": 400,
+        "min_samples_leaf": 100
+      },
+      "ok": false,
+      "error": "Categorical feature 'origin' is expected to have a cardinality <= 255 but actually has a cardinality of 364."
+    },
+    {
+      "family": "extra_trees",
+      "params": {
+        "n_estimators": 300,
+        "max_depth": 20,
+        "min_samples_leaf": 50,
+        "max_features": "sqrt"
+      },
+      "val_roc_auc": 0.7068217802234791,
+      "val_pr_auc": 0.4707052341475927,
+      "fit_seconds": 1.9,
+      "ok": true
+    },
+    {
+      "family": "extra_trees",
+      "params": {
+        "n_estimators": 300,
+        "max_depth": 30,
+        "min_samples_leaf": 20,
+        "max_features": "sqrt"
+      },
+      "val_roc_auc": 0.7101477239007978,
+      "val_pr_auc": 0.47853013229164565,
+      "fit_seconds": 2.2,
+      "ok": true
+    },
+    {
+      "family": "extra_trees",
+      "params": {
+        "n_estimators": 300,
+        "max_depth": null,
+        "min_samples_leaf": 100,
+        "max_features": 0.3
+      },
+      "val_roc_auc": 0.7060227506439181,
+      "val_pr_auc": 0.4698294144884321,
+      "fit_seconds": 3.0,
+      "ok": true
+    },
+    {
+      "family": "random_forest",
+      "params": {
+        "n_estimators": 300,
+        "max_depth": 20,
+        "min_samples_leaf": 50,
+        "max_features": "sqrt"
+      },
+      "val_roc_auc": 0.7131552238161669,
+      "val_pr_auc": 0.48158059638413414,
+      "fit_seconds": 4.0,
+      "ok": true
+    },
+    {
+      "family": "random_forest",
+      "params": {
+        "n_estimators": 300,
+        "max_depth": 30,
+        "min_samples_leaf": 20,
+        "max_features": "sqrt"
+      },
+      "val_roc_auc": 0.7138663507332902,
+      "val_pr_auc": 0.4847185860915866,
+      "fit_seconds": 4.8,
+      "ok": true
+    },
+    {
+      "family": "random_forest",
+      "params": {
+        "n_estimators": 300,
+        "max_depth": null,
+        "min_samples_leaf": 100,
+        "max_features": 0.3
+      },
+      "val_roc_auc": 0.7107190248307934,
+      "val_pr_auc": 0.4780926820438247,
+      "fit_seconds": 7.1,
+      "ok": true
+    },
+    {
+      "family": "ensemble_rank_blend",
+      "params": {
+        "members": [
+          "catboost",
+          "extra_trees",
+          "random_forest"
+        ]
+      },
+      "val_roc_auc": 0.7154043045654147,
+      "val_pr_auc": 0.4855074141971189,
+      "ok": true
+    }
+  ]
+}

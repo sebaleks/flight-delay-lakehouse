@@ -75,6 +75,13 @@ def _hist_sql(project: str, gold: str, cutoff: str) -> str:
     int_aircraft_rotation derives them, and both are restricted to rows with a
     non-null rotation_position — swap-shaped linkages carry NULL rotation under
     the tail-swap restriction and must not define a band.
+
+    NOTE the absence of a `dest` aggregation. The mart's hist_dest_* is NOT
+    arrival performance into the destination — it is that airport's OUTBOUND
+    (origin-grain) rate, used as a congestion-propensity proxy. Computing
+    arrivals here instead produced rates wrong by up to 0.16 on 357 of 373
+    airports (IAG: 0.190 arriving vs 0.355 departing), which the verification
+    caught. The dest level is synthesised from the origin level below.
     """
     band = """case
             when not has_inbound_leg then 'no_inbound'
@@ -86,7 +93,6 @@ def _hist_sql(project: str, gold: str, cutoff: str) -> str:
         ("route", "route", ""),
         ("carrier", "carrier", ""),
         ("origin", "origin", ""),
-        ("dest", "dest", ""),
         ("turnaround_band", band, "and rotation_position is not null"),
         (
             "rotation_position",
@@ -122,7 +128,16 @@ def _hist_sql(project: str, gold: str, cutoff: str) -> str:
 
 
 def fit_window_hist(bq, project: str, gold: str, cutoff: date) -> pd.DataFrame:
-    return bq.query(_hist_sql(project, gold, cutoff.isoformat())).to_dataframe()
+    """The per-(grain, key) lookup, including the synthesised dest level.
+
+    hist_dest_* reuses the ORIGIN-grain rates keyed by the destination airport:
+    the mart treats "how late do flights LEAVE this airport" as the congestion
+    signal for arriving there, not "how late do flights arrive into it".
+    """
+    df = bq.query(_hist_sql(project, gold, cutoff.isoformat())).to_dataframe()
+    dest = df[df["grain"] == "origin"].copy()
+    dest["grain"] = "dest"
+    return pd.concat([df, dest], ignore_index=True)
 
 
 def verify_recompute(bq, project: str, gold: str) -> dict:
@@ -281,11 +296,18 @@ def build(kind: str, params: dict, spw: float):
     if kind == "hist_gbdt":
         from sklearn.ensemble import HistGradientBoostingClassifier
 
+        # sklearn caps NATIVE categorical support at 255 levels; route has
+        # 7,539 and origin/dest ~375, so only carrier (17) can be declared.
+        # The rest enter as integer codes, i.e. treated as ORDINAL — a real
+        # handicap for this learner on this feature set, and worth reporting
+        # rather than hiding: it is exactly the weakness CatBoost's ordered
+        # target statistics exist to remove.
+        low_card = [c for c in f.CATEGORICAL_FEATURES if c == "carrier"]
         return HistGradientBoostingClassifier(
             **params,
             random_state=SEED,
             class_weight="balanced",
-            categorical_features=[f.FEATURES.index(c) for c in f.CATEGORICAL_FEATURES],
+            categorical_features=[f.FEATURES.index(c) for c in low_card],
         )
     if kind == "extra_trees":
         from sklearn.ensemble import ExtraTreesClassifier
