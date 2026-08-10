@@ -45,6 +45,9 @@ from dashboard.predict_client import (
 
 FORECAST_DAYS = 7
 MAX_DAYS_AHEAD = 330
+# Above this the list stops being scannable and the filters are the answer;
+# rendering 500 rows of widgets is also slow.
+MAX_LISTED = 40
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -128,14 +131,44 @@ def _pick_flight(url: str, key: str, title: str, origin_default: str, day: date)
     if not shown:
         st.warning("No flights match those filters. Try clearing one.")
         return None
-    if len(shown) > 300:
-        st.info("Still a long list — pick an airline or a departure window to narrow it.")
+    if len(shown) > MAX_LISTED:
+        st.info(
+            f"{len(shown)} flights is too many to show — pick an airline, a "
+            "destination or a departure window to narrow the list."
+        )
+        return None
 
-    labels = {
-        fl.flight_label(f, names.get(f["dest"], "").rsplit(" (", 1)[0] or None): f for f in shown
-    }
-    chosen = st.selectbox("Your flight", list(labels), key=f"{key}_flight")
-    return labels[chosen]
+    # A LIST, not a spreadsheet: exactly len(shown) rows, no grid, no empty
+    # filler. Each row carries its own select button, so picking is one click
+    # rather than hunting a value in a dropdown.
+    ui.inject_row_css()
+    st.markdown(
+        '<div class="fdl-head"><div class="fdl-cell fdl-key">Flight</div>'
+        '<div class="fdl-cell">To</div><div class="fdl-cell">Departs</div>'
+        '<div class="fdl-cell">Arrives</div><div class="fdl-cell fdl-num"></div></div>',
+        unsafe_allow_html=True,
+    )
+    picked_key = f"{key}_picked"
+    for i, f in enumerate(shown):
+        c1, c2, c3, c4, c5 = st.columns([1.1, 2.4, 1, 1, 0.9])
+        c1.markdown(f"**{f['carrier']} {f['flight_number']}**")
+        c2.markdown(names.get(f["dest"], f["dest"]))
+        c3.markdown(f["dep_time"])
+        c4.markdown(f["arr_time"])
+        if c5.button("Select", key=f"{key}_pick_{i}", use_container_width=True):
+            st.session_state[picked_key] = f
+
+    chosen = st.session_state.get(picked_key)
+    if chosen and any(
+        c["carrier"] == chosen["carrier"] and c["flight_number"] == chosen["flight_number"]
+        for c in shown
+    ):
+        st.success(
+            f"Selected **{chosen['carrier']} {chosen['flight_number']}** — "
+            f"{chosen['origin']} to {chosen['dest']}, departing {chosen['dep_time']}."
+        )
+        return chosen
+    return None
 
 
 def _render_notes(basis: dict) -> None:

@@ -69,24 +69,24 @@ def _ops_capacity() -> None:
 # viewer from reading an ops number as consumer advice, or vice versa.
 PAGES = {
     "For travellers": [
-        st.Page(_predict_flight, title="Will my flight be late?", icon="🔮", default=True),
+        st.Page(_predict_flight, title="My flight", default=True),
     ],
     "For airlines & airports": [
-        st.Page(_ops_capacity, title="Ops capacity replay", icon="📡"),
+        st.Page(_ops_capacity, title="Airport day"),
     ],
     "Explore the data": [
-        st.Page(_overview, title="Overview", icon="🏠"),
-        st.Page(_map, title="Delay map", icon="🗺️"),
-        st.Page(_reliability, title="Who is reliable?", icon="🏆"),
-        st.Page(_timing, title="When do delays happen?", icon="🕒"),
-        st.Page(_routes, title="Route drill-down", icon="🛫"),
+        st.Page(_overview, title="Summary"),
+        st.Page(_map, title="Map by airport"),
+        st.Page(_reliability, title="Airports and airlines"),
+        st.Page(_timing, title="Time and date"),
+        st.Page(_routes, title="Routes"),
     ],
 }
 
 
 def main() -> None:
     with st.sidebar:
-        st.markdown("### ✈️ Flight-Delay Lakehouse")
+        st.markdown("### Flight-Delay Lakehouse")
         st.caption("Gold layer · BigQuery · BTS 2022–2024")
         from dashboard import data
 

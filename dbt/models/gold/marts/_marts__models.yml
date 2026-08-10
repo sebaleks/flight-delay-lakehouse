@@ -1,0 +1,28 @@
+version: 2
+
+models:
+  - name: mart_delays_by_route_carrier
+    description: >
+      Route x carrier grain — who flies a route and how reliably. Additive
+      counts and sums only (deliberately NOT delay_measures(), which emits
+      pre-divided rates): the route page rolls these up across whatever routes
+      the filters selected, so it needs denominators. 16,463 rows.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [route, carrier_key]
+
+  - name: mart_delays_by_time_slice
+    description: >
+      Time-of-travel counts sliceable by origin airport AND carrier, clustered
+      on those two columns. ~2.3M rows — the one mart the dashboard queries
+      with a predicate instead of reading whole; a filtered read is 39 MB
+      against 246 MB for the table (executed-job statistics; a dry run on a
+      clustered table reports an upper bound and shows no pruning). The
+      unfiltered page keeps using the small dash_delays_by_time view.
+      Additive counts and sums only.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              [origin_airport_key, carrier_key, year, month, day_of_week, crs_dep_hour]

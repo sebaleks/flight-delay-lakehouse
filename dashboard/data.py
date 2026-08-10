@@ -20,7 +20,11 @@ from dashboard.config import fq_view, gcp_project, gold_dataset
 CACHE_TTL = 3600  # views change only on a dbt rebuild; 1h is ample
 
 # View name -> short description (drives the Overview health panel).
+# The views that are safe to read WHOLE. dash_time_slice is deliberately
+# absent: it is ~2.3M rows and is queried with a predicate by time_slice().
+# Anything listed here gets SELECT *-ed by the Overview health panel.
 VIEWS: dict[str, str] = {
+    "dash_route_carrier": "one row per route x airline",
     "dash_airport_reliability": "1 row / origin airport",
     "dash_carrier_reliability": "1 row / carrier",
     "dash_delays_by_time": "year × month × day-of-week × dep-hour",
@@ -98,3 +102,40 @@ def airport_coords() -> pd.DataFrame:
         "WHERE latitude IS NOT NULL AND longitude IS NOT NULL"
     )
     return _client().query(sql).to_dataframe(create_bqstorage_client=True)
+
+
+def route_carrier() -> pd.DataFrame:
+    """Route x airline — who flies a route and how reliably. 16,463 rows."""
+    return load_view("dash_route_carrier")
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner="Querying BigQuery…")
+def time_slice(origin: str | None = None, carrier: str | None = None) -> pd.DataFrame:
+    """Time-of-travel counts for ONE airport and/or airline.
+
+    The only loader that does not read its view whole. dash_time_slice is
+    ~2.3M rows, so it is queried WITH a predicate; the base mart is clustered
+    on (origin_airport_key, carrier_key) and the filtered read is 39 MB against
+    246 MB for the table — measured on executed jobs, because a dry run on a
+    clustered table reports an upper bound and shows no pruning at all
+    (docs/benchmarks/README.md makes the same point).
+
+    Unfiltered callers should use delays_by_time() instead: the small
+    pre-aggregated view answers the same questions for the whole network and
+    costs nothing.
+    """
+    where, params = [], []
+    if origin:
+        where.append("origin_airport_key = @origin")
+        params.append(bigquery.ScalarQueryParameter("origin", "STRING", origin))
+    if carrier:
+        where.append("carrier_key = @carrier")
+        params.append(bigquery.ScalarQueryParameter("carrier", "STRING", carrier))
+    sql = f"SELECT * FROM {fq_view('dash_time_slice')}"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    return (
+        _client()
+        .query(sql, job_config=bigquery.QueryJobConfig(query_parameters=params))
+        .to_dataframe(create_bqstorage_client=True)
+    )

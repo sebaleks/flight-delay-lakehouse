@@ -85,9 +85,10 @@ def render() -> None:
             health,
             hide_index=True,
             use_container_width=True,
+            height=ui.table_height(len(health)),
             column_config={"rows": st.column_config.NumberColumn(format="%d")},
         )
         st.caption(
-            "Five thin views over materialized gold marts — the same layer the "
+            "Thin views over materialized gold marts — the same layer the "
             "ML feature mart is built from (no duplicated data or logic)."
         )
