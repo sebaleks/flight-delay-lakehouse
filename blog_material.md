@@ -18,6 +18,8 @@
 | Calibration (held-out test) | Brier **0.191 -> 0.135**, ECE **0.227 -> 0.017**; Platt AUC delta **= 0 exact**; isotonic PR-AUC move **~3.1e-3** |
 | Partition-pruning benchmark | **33.8x** bytes-scanned reduction |
 | PR-AUC base rate (test) | 0.1969 |
+| Serving preload benchmark | **6 queries -> 0** per prediction; **2.31 GB -> 0**; **$1,315 -> $0** per 100k; **5,078 ms -> 13 ms** (390x) |
+| Exact typical-rotation medians | pos **3**, legs **5**, turnaround **64**, inbound_distance **667**, inbound_elapsed **126**, density **2** |
 
 ### Feature-generation progression (identical rows 20,240,662 / identical split 16,678,880 : 3,561,782)
 
@@ -61,6 +63,7 @@ determinism fix (PR #11); the deterministic pinned value is `0.6806 / 0.3479`._
 | 23 | Orchestration & CI/CD | PR #1, PR #13, PR #2, code: architecture_docs |
 | 24 | Calibration (isotonic vs Platt; AUC gate) | PR #15, PR #20, code: calibration_internals, code: determinism_shared, code: serving_edges |
 | 25 | Two-regime framing (pre-departure vs real-time operational) | PR #10, PR #15, PR #16, PR #17, PR #18, PR #5, code: architecture_docs |
+| 26 | Serving preload benchmark + the approx_quantiles nondeterminism | PR #26, code: benchmark, code: serving_edges, code: determinism_shared |
 
 ## Source index — PR → chapters fed
 
@@ -86,6 +89,7 @@ determinism fix (PR #11); the deterministic pinned value is `0.6806 / 0.3479`._
 | PR #18 | 1, 2, 3, 4, 6, 9, 10, 25 |
 | PR #19 | 3, 4, 5, 6, 7, 8, 9, 10 |
 | PR #20 | 7, 9, 10, 22, 24 |
+| PR #26 | 9, 10, 21, 26 |
 
 ---
 
@@ -553,6 +557,25 @@ determinism fix (PR #11); the deterministic pinned value is `0.6806 / 0.3479`._
   - **Calibration ties in (ch 24):** the pre-departure classifier's recall-weighted scores are remapped to honest frequencies without disturbing ranking — probability honesty *within* the built regime.
   - **Honest linear-model footnote:** logreg retains almost none of the cascade uplift under the restriction (`0.3382` vs hourly `0.3310`) because it median-imputes the 4.12% all-NULL rows and loses the band separation; the surviving signal is largely tree-accessible (XGBoost consumes NULLs natively). A clean illustration that a leakage/regime-boundary fix can be near-invisible to a linear model and material to trees.
   - **Regression honesty:** shipping the restricted regressor (49.71/19.10) despite it being marginally worse than the contaminated one (49.56/19.00) rather than cherry-picking the classifier win — the two-regime boundary is priced and paid, not hidden.
+
+## Serving & inference (chapter 26)
+
+### Chapter 26 - The second benchmark, and the nondeterminism it exposed
+- **Numbers / evidence:** Per `/predict` call, executed-job statistics with cache off and `cache_hit` asserted false, 3 reps: **6 BigQuery queries → 0**, **2,311,725,056 bytes (2.31 GB) → 0**, **$0.01315 → $0** (on-demand $6.25/TiB), **$1,315 → $0 per 100,000 predictions**. Median latency 1 flight **5,078 ms → 13 ms (390x)**; 1,500 flights **11,207 ms → 194 ms (58x)**. Startup billed **3,028,287,488 B (3.03 GB) → 41,943,040 B (42 MB), 72x** — but startup WALL CLOCK **7,871 ms → 7,675 ms, ~unchanged** (dominated by loading ~730 MB of artifacts, not queries). Live: the ORD batch demo went **8.3 s → 1.8 s** for ~840 flights. The replacement is three dbt tables: `serving_entity_profile` **8,316 rows**, `serving_density_profile` **34,979 rows**, `serving_typical_rotation` **1 row**. The old cost was FLAT in batch size — a 1-flight and a 1,500-flight request both scanned 2.31 GB — because none of the five lookups carried a `flight_date` predicate, so partition pruning never applied over the 20,240,662-row mart.
+- **Why it's strong:** A second, independent before/after on a different axis from the 33.8x partition benchmark — that one is analytics scan volume, this one is the inference path — and it ends in a *correctness* find rather than a speed number.
+- **Narrative beat:** The optimization was routine (materialize constants that only change on a dbt rebuild). What made it worth writing about is what fell out of checking parity: **the thing being optimized was already nondeterministic, and nobody knew.**
+- **Source:** PR #26; docs/benchmarks/serving_preload_benchmark.md; ml/parity.py; dbt/models/gold/ml/serving_*.sql.
+- **Details:**
+  - **The find.** The "typical rotation profile" — training medians of the rotation schedule attributes, used by every prediction made WITHOUT rotation context, i.e. every consumer request — was computed with `approx_quantiles(x, 2)[offset(1)]` **at process startup**. That is an approximation whose result depends on how BigQuery shards the scan. The same query on identical data was observed returning **four different values for `inbound_distance`: 666 / 674 / 663 / 651**, against an exact median of **667**; `sched_turnaround_min` came back **63** against an exact **64**. So two processes serving the same request could return different probabilities. Largest divergence measured in the golden set: a flight moving **0.4300 → 0.4968** — a 6.7-point swing attributable entirely to approximation noise in a lookup.
+  - **The second, smaller instance of the same class:** `any_value(distance)` per route. **85 of 7,539 routes carry two distinct distances** (a 1-mile rounding split in the BTS source), so `any_value` picked arbitrarily per call. Fixed with `min(distance)` — deterministic, and 1 mile is immaterial to a feature spanning ~30–5,000.
+  - **Both fixes are `percentile_disc` / `min` — exact and deterministic. Verified by rebuilding the three tables twice and diffing: byte-identical.** Costs ~35 s once per dbt build instead of an approximation per startup.
+  - **Parity had to be reported in two parts, and that is the honest bit.** The refactor was supposed to be bit-identical, but the determinism fix deliberately changes values. So: 184 golden requests spanning both rotation paths, both density paths, four entities absent from the training vocabulary. **30 of 30 requests that supplied both rotation context and density are bit-identical** across all 51 features, the calibrated probability and the expected minutes. Of the 154 that depend on the changed medians, **149 were unchanged anyway**, and the only features that moved across the entire run were the four those medians feed (`inbound_distance`, `sched_turnaround_min`, `sched_turnaround_slack_min`, `origin_dep_density_hour`). Mean |Δp| **0.0006**, max **0.0668**.
+  - **A methodology round, exactly like the 33.8x benchmark had three (ch. 21).** The first baseline measurement was WRONG: reps 2–3 at n=100 and n=1,500 reported **0 bytes** because the flight sample's key set saturated, the SQL repeated verbatim, and BigQuery's 24-hour result cache served it. That would have understated the baseline by ~2.3 GB per call. Fixed by forcing `use_query_cache=False` and asserting `job.cache_hit` is false. Same failure mode as the dry-run-estimates round in ch. 21: the first number you get from a benchmark harness is usually measuring the harness.
+  - **The startup wall clock is reported as unchanged, deliberately.** 7.9 s → 7.7 s. The 72x is billed bytes, not speed — artifact loading dominates. Quoting only the 72x would be the misleading version of this result.
+  - **Review discipline, again (ch. 10).** A code review of the PR found 14 issues; the load-bearing three: the new `include_features=False` flag was **dead** (the one bulk caller still built the 51-key block and popped it, so the stated optimization was unrealized); an undeclared ordering contract between two loader functions meant re-running one erased the typical profile and every context-less request would then score on an out-of-distribution NaN vector **instead of raising**; and `build_context` hit a bare BigQuery 404 on the common deploy mistake (new image, old dataset) instead of the actionable error the code carefully raises for the empty case.
+  - **The best small story in the whole PR.** The review's point that the golden-vector harness belonged in the repo — the benchmark's correctness claim rested on it, and a SQL header instructed future editors to "re-run the golden-vector parity check" against a file that was not committed. Committing it as `ml/parity.py` and re-running it **immediately caught a bug introduced while fixing the review**: the loader's return type was changed to `dict` and the `return` statement forgotten, so `build_context` died on `NoneType` subscript. Ruff does not catch that and mypy is not in CI. The harness paid for itself within minutes of being committed.
+  - **New standing guards:** `assert_serving_lookup_entities_constant` pins the constant-within-entity property that every `any_value()` in the lookup model depends on — including the re-derived `turnaround_band` / `rotation_position` keys, so a threshold moving on one side of that SQL/Python mirror fails the build instead of making `any_value` arbitrary. Plus `assert_serving_typical_rotation_singleton` (serving pins every context-less prediction to `med[0]`) and 16 pure unit tests with no credentials.
+  - **Cross-refs:** ch. 21 (the other benchmark, and its methodology rounds), ch. 9 (across-rebuild determinism — this is the same value applied to the serving tier), ch. 10 (review discipline), ch. 22 (artifact/contract thinking), ch. 17 (the lookups are a fourth purpose-built shape off the one gold layer).
 
 ## Beyond the inventory (blog-worthy items fitting no chapter)
 

@@ -55,14 +55,18 @@ from __future__ import annotations
 import logging
 import math
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
+from functools import lru_cache
 from pathlib import Path
+from types import MappingProxyType
 from zoneinfo import ZoneInfo
 
 import joblib
 import pandas as pd
 import xgboost as xgb
+from google.api_core.exceptions import NotFound
 from google.cloud import bigquery
 
 from ingestion.config import require_env
@@ -72,8 +76,16 @@ from ml.train import ARTIFACT_ROOT, LOGREG_INPUT_COLUMNS
 
 log = logging.getLogger("ml.serving")
 
-MART = "ml_flight_features"
-HIST_GRAINS = {"route": "route", "carrier": "carrier", "origin": "origin", "dest": "dest"}
+# the serving lookup layer (dbt/models/gold/ml/serving_*.sql) — tiny tables that
+# materialize what the request path used to query per call. Serving no longer
+# reads ml_flight_features at all.
+ENTITY_PROFILE = "serving_entity_profile"
+DENSITY_PROFILE = "serving_density_profile"
+TYPICAL_ROTATION = "serving_typical_rotation"
+# the four entity grains carrying hist_* triples. A frozenset, not a mapping:
+# the values used to be the mart column name interpolated into the per-grain
+# SQL, and that query is gone — every remaining use is membership.
+HIST_GRAINS = frozenset({"route", "carrier", "origin", "dest"})
 
 
 class SchemaMismatchError(RuntimeError):
@@ -130,16 +142,31 @@ class ServingContext:
     gold: str
     airports: pd.DataFrame  # iata -> latitude, longitude, tz
     forecast_cache: dict = field(default_factory=dict)
-    # (band -> 3 hist values), (position key -> 3 hist values): loaded once at
-    # startup from the mart (constant within entity — byte-exact training
-    # values), see _load_rotation_hist
+    # (band -> 3 hist values), (position key -> 3 hist values), plus the
+    # "typical" rotation profile: read once at startup from
+    # serving_entity_profile / serving_typical_rotation (constant within
+    # entity — byte-exact training values), see _load_rotation_hist
     rotation_hist: dict = field(default_factory=dict)
-    density_cache: dict = field(default_factory=dict)
+    # PRELOADED SERVING LOOKUPS — the request path issues ZERO BigQuery
+    # queries. Each is read whole at startup from a tiny gold table that
+    # materializes the query this used to run per request:
+    #   hist            {grain: {entity_key: {3 hist values}}}   ~8.3k entries
+    #   route_distance  {route: distance}                        7.5k entries
+    #   density         {(origin, hour, weekday): median}        ~35k entries
+    # They change only when the mart is rebuilt, which is exactly when the
+    # process is redeployed — so a cache with a TTL would buy nothing.
+    hist: dict = field(default_factory=dict)
+    route_distance: dict = field(default_factory=dict)
+    density: dict = field(default_factory=dict)
     # training category vocabulary per categorical feature: unseen values
     # must become MISSING before prediction — xgboost >= 3 hard-errors on a
     # category absent from the trained encoder instead of routing it to the
     # default direction; see assemble_features
     category_vocab: dict = field(default_factory=dict)
+    # the same vocabulary pre-sorted, because pd.Categorical needs an ORDER and
+    # re-sorting 7,539 routes on every request is pure waste once the
+    # vocabulary is fixed at startup. Set for membership, list for categories.
+    category_order: dict = field(default_factory=dict)
 
 
 def load_models(artifacts_dir: Path | None = None) -> Models:
@@ -202,21 +229,105 @@ def build_context(artifacts_dir: Path | None = None) -> ServingContext:
         .set_index("iata")
     )
     ctx = ServingContext(models=load_models(artifacts_dir), bq=bq, gold=gold, airports=airports)
-    ctx.rotation_hist = _load_rotation_hist(ctx)
-    vocab_rows = ctx.bq.query(
-        f"select 'carrier' as col, carrier as v from `{bq.project}.{gold}.{MART}` group by v "
-        f"union all select 'origin', origin from `{bq.project}.{gold}.{MART}` group by 2 "
-        f"union all select 'dest', dest from `{bq.project}.{gold}.{MART}` group by 2 "
-        f"union all select 'route', route from `{bq.project}.{gold}.{MART}` group by 2"
-    ).result()
-    ctx.category_vocab = {}
-    for r in vocab_rows:
-        ctx.category_vocab.setdefault(r["col"], set()).add(r["v"])
-    log.info(
-        "category vocab loaded: %s",
-        {k: len(v) for k, v in ctx.category_vocab.items()},
-    )
+    # the rotation levels are RETURNED rather than written onto ctx, so the
+    # dependency between these two loads is a visible argument instead of an
+    # undeclared ordering contract on a mutable field
+    rotation_levels = _load_serving_lookups(ctx)
+    ctx.rotation_hist = _load_rotation_hist(ctx, rotation_levels)
     return ctx
+
+
+def _missing_lookup_error(table: str) -> RuntimeError:
+    return RuntimeError(
+        f"{table} is missing or empty — build the serving lookups BEFORE deploying "
+        "a serving image against this dataset: dbt build -s serving_entity_profile "
+        "serving_density_profile serving_typical_rotation"
+    )
+
+
+def _load_serving_lookups(ctx: ServingContext) -> dict:
+    """Read the whole serving lookup layer once, into plain dicts.
+
+    Replaces the five per-request queries and the startup vocab union. Those
+    scanned the 20.2M-row mart without partition pruning — ~2.7 GB per
+    /predict call — to fetch a few thousand constants that only change on a
+    dbt rebuild. serving_entity_profile is ~8.3k rows.
+
+    The category vocabulary falls out of the same table for free: the training
+    vocabulary at a level IS the set of entity keys present at that level.
+
+    Returns the two rotation levels (band / position) read on the same pass,
+    for _load_rotation_hist to combine with the typical profile.
+    """
+    try:
+        rows = list(
+            ctx.bq.query(
+                f"select entity_level, entity_key, hist_arr_del15_rate, "
+                f"hist_avg_arr_delay_minutes, hist_n_flights, distance "
+                f"from `{ctx.bq.project}.{ctx.gold}.{ENTITY_PROFILE}`"
+            ).result()
+        )
+    except NotFound as exc:
+        # a gold dataset built before the lookup layer existed: surface the
+        # actionable message, not a bare 404 from three frames down
+        raise _missing_lookup_error(ENTITY_PROFILE) from exc
+    if not rows:
+        raise _missing_lookup_error(ENTITY_PROFILE)
+    ctx.hist = {g: {} for g in HIST_GRAINS}
+    ctx.route_distance = {}
+    ctx.category_vocab = {}
+    # the two rotation levels live in the same table; collect them on this one
+    # pass rather than re-querying it (see _load_rotation_hist)
+    rotation: dict = {"band": {}, "pos": {}}
+    rotation_levels = {"turnaround_band": "band", "rotation_position": "pos"}
+    for r in rows:
+        level, key = r["entity_level"], r["entity_key"]
+        # keyed by the mart's own column names so the assembled row dict is
+        # identical to what the old per-grain query produced
+        if level in HIST_GRAINS:
+            ctx.hist[level][key] = {
+                f"hist_{level}_arr_del15_rate": r["hist_arr_del15_rate"],
+                f"hist_{level}_avg_arr_delay_minutes": r["hist_avg_arr_delay_minutes"],
+                f"hist_{level}_n_flights": r["hist_n_flights"],
+            }
+            ctx.category_vocab.setdefault(level, set()).add(key)
+        elif level in rotation_levels:
+            rotation[rotation_levels[level]][key] = {
+                "rate": r["hist_arr_del15_rate"],
+                "avg_min": r["hist_avg_arr_delay_minutes"],
+                "n": r["hist_n_flights"],
+            }
+        if level == "route" and r["distance"] is not None:
+            ctx.route_distance[key] = float(r["distance"])
+    missing = [g for g in HIST_GRAINS if not ctx.hist[g]]
+    missing += [lv for lv, k in rotation_levels.items() if not rotation[k]]
+    if missing:
+        raise RuntimeError(f"{ENTITY_PROFILE} has no rows for level(s) {sorted(missing)}")
+
+    # pd.Categorical needs the categories in a stable ORDER; sorting the 7,539
+    # routes on every request would be pure waste now that the vocabulary is
+    # fixed at startup. Sort once here, keep the set for the membership test.
+    ctx.category_order = {c: sorted(v) for c, v in ctx.category_vocab.items()}
+
+    try:
+        ctx.density = {
+            (r["origin"], int(r["crs_dep_hour"]), int(r["day_of_week"])): float(r["density_median"])
+            for r in ctx.bq.query(
+                f"select origin, crs_dep_hour, day_of_week, density_median "
+                f"from `{ctx.bq.project}.{ctx.gold}.{DENSITY_PROFILE}`"
+            ).result()
+        }
+    except NotFound as exc:
+        raise _missing_lookup_error(DENSITY_PROFILE) from exc
+    if not ctx.density:
+        raise _missing_lookup_error(DENSITY_PROFILE)
+    log.info(
+        "serving lookups loaded: hist %s, %d route distances, %d density keys",
+        {g: len(v) for g, v in ctx.hist.items()},
+        len(ctx.route_distance),
+        len(ctx.density),
+    )
+    return rotation
 
 
 # Mirrors the band derivation in int_aircraft_rotation.sql (a small necessary
@@ -233,67 +344,57 @@ def _turnaround_band(has_inbound: bool, turnaround: float | None) -> str:
     return "ge_120"
 
 
-def _load_rotation_hist(ctx: ServingContext) -> dict:
-    """The turnaround-band and rotation-position hist triples, read once at
-    startup FROM THE MART (constant within entity — byte-exact training
-    values, zero rates-formula duplication; the band is reconstructed from
-    mart columns exactly as the standing dbt guard reconstructs it), PLUS
-    the training MEDIANS of the rotation schedule attributes — the 'typical
-    rotation profile' used when a caller provides no context. Why medians
-    and not NaN: the mart has essentially no tail-unknown rows (completed
-    flights carry tails), so NaN in these columns sits OUTSIDE the training
-    distribution and empirically produces garbage scores; unknown-but-
-    knowable schedule facts are instead estimated with training medians —
-    the same epistemic move as the density estimator — and the response
-    flags the estimate."""
-    band_expr = """
-        case
-            when not has_inbound_leg then 'no_inbound'
-            when sched_turnaround_min < 35 then 'lt_35'
-            when sched_turnaround_min < 60 then '35_60'
-            when sched_turnaround_min < 120 then '60_120'
-            else 'ge_120'
-        end"""
-    pos_expr = "cast(least(rotation_position, 6) as string)"
-    out: dict = {"band": {}, "pos": {}}
-    for kind, expr, grain in (
-        ("band", band_expr, "turnaround_band"),
-        ("pos", pos_expr, "rotation_position"),
+def _load_rotation_hist(ctx: ServingContext, rotation_levels: dict) -> dict:
+    """The turnaround-band and rotation-position hist triples, plus the
+    'typical rotation profile' (training medians of the rotation schedule
+    attributes) used when a caller provides no context.
+
+    Both now come from the serving lookup tables rather than from aggregates
+    issued at startup. The values are unchanged in kind — the band and
+    position levels of serving_entity_profile are the SAME any_value(...)
+    group-by this used to run — but the medians are now EXACT
+    (percentile_disc) instead of approx_quantiles. That is a deliberate fix,
+    not a port: the approximation was measured returning different answers on
+    identical data across runs, so the typical profile — and therefore every
+    prediction made without rotation context — depended on which process
+    served it. See serving_typical_rotation.sql for the measurements.
+
+    Why medians and not NaN: the mart has essentially no tail-unknown rows
+    (completed flights carry tails), so NaN in these columns sits OUTSIDE the
+    training distribution and empirically produces garbage scores;
+    unknown-but-knowable schedule facts are instead estimated with training
+    medians — the same epistemic move as the density estimator — and the
+    response flags the estimate.
+    """
+    # band/pos were collected on the single entity-profile read and handed in;
+    # only the one-row median table is left to fetch
+    out: dict = {"band": rotation_levels["band"], "pos": rotation_levels["pos"]}
+    try:
+        med = list(
+            ctx.bq.query(
+                f"select typical_rotation_position as pos, typical_legs_today as legs, "
+                f"typical_sched_turnaround_min as turn, typical_inbound_distance as dist, "
+                f"typical_inbound_crs_elapsed_min as elapsed, typical_density as density "
+                f"from `{ctx.bq.project}.{ctx.gold}.{TYPICAL_ROTATION}`"
+            ).result()
+        )
+    except NotFound as exc:
+        raise _missing_lookup_error(TYPICAL_ROTATION) from exc
+    if len(med) > 1:
+        # the model is contractually one row and _load_rotation_hist pins every
+        # context-less prediction to med[0]; more than one row would make that
+        # choice depend on scan order — the exact class of bug the exact-median
+        # change removed. A dbt singular test pins this on the SQL side too.
+        raise RuntimeError(f"{TYPICAL_ROTATION} returned {len(med)} rows; it must be exactly 1")
+    if not med or any(
+        med[0][k] is None for k in ("pos", "legs", "turn", "dist", "elapsed", "density")
     ):
-        rows = ctx.bq.query(
-            f"select {expr} as k, "
-            f"any_value(hist_{grain}_arr_del15_rate) as rate, "
-            f"any_value(hist_{grain}_avg_arr_delay_minutes) as avg_min, "
-            f"any_value(hist_{grain}_n_flights) as n "
-            f"from `{ctx.bq.project}.{ctx.gold}.{MART}` "
-            f"where rotation_position is not null group by k"
-        ).result()
-        out[kind] = {r["k"]: dict(r) for r in rows}
-    med = list(
-        ctx.bq.query(
-            f"select approx_quantiles(rotation_position, 2)[offset(1)] as pos, "
-            f"approx_quantiles(legs_today, 2)[offset(1)] as legs, "
-            f"approx_quantiles(sched_turnaround_min, 2)[offset(1)] as turn, "
-            f"approx_quantiles(inbound_distance, 2)[offset(1)] as dist, "
-            f"approx_quantiles(inbound_crs_elapsed_min, 2)[offset(1)] as elapsed, "
-            # last-resort density (misses + unknown airports): TRAINING median
-            # over distinct schedule-hours, not flight rows
-            f"(select approx_quantiles(d, 2)[offset(1)] from (select distinct origin, "
-            f"flight_date, crs_dep_hour, origin_dep_density_hour as d "
-            f"from `{ctx.bq.project}.{ctx.gold}.{MART}` where is_training_row)) as density "
-            # TRAINING-window medians: the fallback must sit inside the
-            # distribution the models were fit on, not a full-mart blend
-            f"from `{ctx.bq.project}.{ctx.gold}.{MART}` "
-            f"where has_inbound_leg and is_training_row"
-        ).result()
-    )[0]
-    if any(med[k] is None for k in ("pos", "legs", "turn", "dist", "elapsed", "density")):
         raise RuntimeError(
-            "ml_flight_features is empty or missing rotation columns - "
-            "build the mart (dbt build -s ml_flight_features) before serving"
+            f"{TYPICAL_ROTATION} is empty or has NULL medians - build the serving "
+            "lookups (dbt build -s serving_typical_rotation) before serving"
         )
     out["typical"] = {
-        k: float(med[k]) for k in ("pos", "legs", "turn", "dist", "elapsed", "density")
+        k: float(med[0][k]) for k in ("pos", "legs", "turn", "dist", "elapsed", "density")
     }
     log.info(
         "rotation hist loaded: %d bands, %d position keys; typical profile %s",
@@ -315,39 +416,22 @@ def _needs_density_estimate(v: float | None) -> bool:
 
 
 def _density_estimates(ctx: ServingContext, keys: list[tuple[str, int, int]]) -> dict:
-    """Serve-time ESTIMATE of origin_dep_density_hour: the TRAINING-window
-    median over distinct schedule-hours (not flight rows — a flight-row
-    median would overweight busy banks) for (origin, hour, weekday). Only
-    KNOWN airports are queried and cached (bounded: airports x 24 x 7);
-    unknown airports and empty groups fall back to the global training
-    median — always an in-distribution value, never NaN. Parameterized —
-    no request-derived string ever enters the SQL text."""
+    """Serve-time ESTIMATE of origin_dep_density_hour, from the preloaded
+    lookup: the TRAINING-window median over distinct schedule-hours (not
+    flight rows — a flight-row median would overweight busy banks) for
+    (origin, hour, weekday).
+
+    Fallback chain is unchanged from the query version it replaces: an unknown
+    airport, or a known airport with no training rows at that hour/weekday,
+    takes the global training median — always an in-distribution value, never
+    NaN. The airports-index check is kept so an unknown airport resolves to the
+    global median for the same reason it always did, rather than incidentally
+    because the lookup missed.
+    """
     default = ctx.rotation_hist.get("typical", {}).get("density", math.nan)
-    known = [k for k in keys if k[0] in ctx.airports.index]
-    missing = [k for k in known if k not in ctx.density_cache]
-    if missing:
-        os_, hs, ds = (list(v) for v in zip(*missing, strict=True))
-        rows = ctx.bq.query(
-            f"select origin, h, d, approx_quantiles(density, 2)[offset(1)] as med "
-            f"from (select distinct origin, cast(crs_dep_hour as int64) h, "
-            f"cast(day_of_week as int64) d, flight_date, origin_dep_density_hour as density "
-            f"from `{ctx.bq.project}.{ctx.gold}.{MART}` where is_training_row) "
-            f"where (origin, h, d) in (select (o[offset(i)], hh[offset(i)], dd[offset(i)]) "
-            f"from unnest([struct(@origins as o, @hours as hh, @dows as dd)]), "
-            f"unnest(generate_array(0, array_length(@origins) - 1)) as i) "
-            f"group by origin, h, d",
-            job_config=bigquery.QueryJobConfig(
-                query_parameters=[
-                    bigquery.ArrayQueryParameter("origins", "STRING", os_),
-                    bigquery.ArrayQueryParameter("hours", "INT64", hs),
-                    bigquery.ArrayQueryParameter("dows", "INT64", ds),
-                ]
-            ),
-        ).result()
-        found = {(r["origin"], r["h"], r["d"]): float(r["med"]) for r in rows}
-        for k in missing:
-            ctx.density_cache[k] = found.get(k, default)
-    return {k: ctx.density_cache.get(k, default) for k in keys}
+    return {
+        k: (ctx.density.get(k, default) if k[0] in ctx.airports.index else default) for k in keys
+    }
 
 
 def _rotation_features(fl: FlightRequest, ctx: ServingContext, density: float) -> dict[str, float]:
@@ -423,47 +507,46 @@ def _rotation_features(fl: FlightRequest, ctx: ServingContext, density: float) -
 
 
 def _hist_lookup(ctx: ServingContext, grain: str, keys: list[str]) -> dict[str, dict]:
-    """Constant-within-entity hist values straight from the mart (byte-exact
-    parity with training); absent entities simply do not appear (NaN path)."""
-    if not keys:
-        return {}
-    cols = ", ".join(
-        f"any_value(hist_{grain}_{s}) as hist_{grain}_{s}"
-        for s in ("arr_del15_rate", "avg_arr_delay_minutes", "n_flights")
-    )
-    rows = ctx.bq.query(
-        f"select {HIST_GRAINS[grain]} as k, {cols} "
-        f"from `{ctx.bq.project}.{ctx.gold}.{MART}` "
-        f"where {HIST_GRAINS[grain]} in unnest(@keys) group by k",
-        job_config=bigquery.QueryJobConfig(
-            query_parameters=[bigquery.ArrayQueryParameter("keys", "STRING", keys)]
-        ),
-    ).result()
-    return {r["k"]: dict(r) for r in rows}
+    """Constant-within-entity hist values, from the preloaded lookup.
+
+    Same contract as the per-request query it replaces: absent entities simply
+    do not appear, so the caller's .get(...) leaves NaN — the training NULL
+    path for an entity first seen after the cutoff.
+    """
+    table = ctx.hist.get(grain, {})
+    return {k: table[k] for k in keys if k in table}
 
 
 def _route_distance(ctx: ServingContext, routes: list[str]) -> dict[str, float]:
-    if not routes:
-        return {}
-    rows = ctx.bq.query(
-        f"select route, any_value(distance) as distance "
-        f"from `{ctx.bq.project}.{ctx.gold}.{MART}` where route in unnest(@r) group by route",
-        job_config=bigquery.QueryJobConfig(
-            query_parameters=[bigquery.ArrayQueryParameter("r", "STRING", routes)]
-        ),
-    ).result()
-    return {r["route"]: float(r["distance"]) for r in rows}
+    return {r: ctx.route_distance[r] for r in routes if r in ctx.route_distance}
 
 
-def _holiday_flags(d: date) -> dict[str, float]:
+@lru_cache(maxsize=512)
+def _holiday_flags(d: date) -> Mapping[str, float]:
+    """Holiday flags for one date, using the same library the training calendar
+    was generated with.
+
+    Cached: a whole-airport batch is one or two distinct dates across hundreds
+    of flights, and constructing a 3-year holidays calendar per flight was pure
+    waste.
+
+    Returns a READ-ONLY mapping, not a dict. Every caller for a given date gets
+    the same object, so a caller that mutated it would silently corrupt the
+    feature for every subsequent request in the process — across all FastAPI
+    threadpool workers, with no traceback. MappingProxyType makes that a
+    TypeError instead of a promise in a docstring. `dict.update(proxy)` works,
+    which is how the one caller consumes it.
+    """
     import holidays  # same library the training calendar was generated with
 
     us = holidays.country_holidays("US", years=range(d.year - 1, d.year + 2))
-    return {
-        "is_holiday": float(d in us),
-        "is_day_before_holiday": float(d + timedelta(days=1) in us),
-        "is_day_after_holiday": float(d - timedelta(days=1) in us),
-    }
+    return MappingProxyType(
+        {
+            "is_holiday": float(d in us),
+            "is_day_before_holiday": float(d + timedelta(days=1) in us),
+            "is_day_after_holiday": float(d - timedelta(days=1) in us),
+        }
+    )
 
 
 # NDFD grids refresh roughly hourly: cache each airport's fetched GRID for 30
@@ -618,7 +701,9 @@ def coerce_feature_frame(ctx: ServingContext, x: pd.DataFrame) -> pd.DataFrame:
                     int(unseen.sum()),
                     x.loc[unseen, c].iloc[0],
                 )
-            x[c] = pd.Categorical(x[c], categories=sorted(vocab))
+            # pre-sorted at startup (ctx.category_order); sorted(vocab) here
+            # would re-sort the 7,539-route list on every request
+            x[c] = pd.Categorical(x[c], categories=ctx.category_order[c])
         else:
             x[c] = x[c].astype("category")
     for c in f.NUMERIC_FEATURES:
@@ -633,7 +718,16 @@ def coerce_feature_frame(ctx: ServingContext, x: pd.DataFrame) -> pd.DataFrame:
     return x
 
 
-def predict(ctx: ServingContext, flights: list[FlightRequest]) -> list[dict]:
+def predict(
+    ctx: ServingContext, flights: list[FlightRequest], include_features: bool = True
+) -> list[dict]:
+    """Score a batch. Model calls are vectorised across the whole batch.
+
+    include_features=False drops the per-flight 51-key `features` block. Bulk
+    callers (a whole airport-day) do not want 51 floats per flight in the
+    payload, and building it was the dominant per-flight cost — see
+    _feature_records.
+    """
     if not flights:
         return []
     x = assemble_features(ctx, flights)
@@ -646,6 +740,9 @@ def predict(ctx: ServingContext, flights: list[FlightRequest]) -> list[dict]:
     p_cal = ctx.models.calibrator.transform(p_xgb)
     minutes = ctx.models.reg.predict(x)
     p_logreg = ctx.models.logreg.predict_proba(x[LOGREG_INPUT_COLUMNS])[:, 1]
+    # vectorised once, not N x 51 scalar .iloc lookups inside the loop
+    feature_records = _feature_records(x) if include_features else None
+    has_weather = (x["has_origin_weather"].to_numpy() == 1.0).tolist()
     out = []
     for i, fl in enumerate(flights):
         out.append(
@@ -659,7 +756,7 @@ def predict(ctx: ServingContext, flights: list[FlightRequest]) -> list[dict]:
                 "probability_calibration": ctx.models.calibrator.method,
                 "expected_delay_minutes": round(float(minutes[i]), 1),
                 "logreg_baseline_probability": round(float(p_logreg[i]), 4),
-                "has_origin_weather": bool(x["has_origin_weather"].iloc[i] == 1.0),
+                "has_origin_weather": has_weather[i],
                 # whether the rotation LINKAGE (position/legs/inbound) was
                 # caller-provided or the typical-median estimate. The API
                 # enforces complete-or-absent, so "provided" means the whole
@@ -674,17 +771,36 @@ def predict(ctx: ServingContext, flights: list[FlightRequest]) -> list[dict]:
                     if _needs_density_estimate(fl.origin_dep_density_hour)
                     else "provided"
                 ),
-                # pd.isna, not isinstance(float): numeric columns hold
-                # np.float32, which is NOT a Python float — the old check
-                # never fired and NaN leaked into the JSON on the NULL path
-                "features": {
-                    k: (
-                        None
-                        if pd.isna(v := x[k].iloc[i])
-                        else (str(v) if k in f.CATEGORICAL_FEATURES else float(v))
-                    )
-                    for k in f.FEATURES
-                },
             }
         )
+        if feature_records is not None:
+            out[-1]["features"] = feature_records[i]
     return out
+
+
+def _feature_records(x: pd.DataFrame) -> list[dict]:
+    """The per-flight `features` block for a whole frame, built column-wise.
+
+    Same output as the previous per-row comprehension, which did one pandas
+    scalar .iloc lookup per feature per flight (51 x N — 76,500 of them for the
+    benchmark's 1,500-flight batch, and the dominant per-flight cost in the
+    response path). Here each column is converted once with a vectorised call
+    and the rows are zipped together. Bulk callers should pass
+    include_features=False and skip this entirely.
+
+    NaN -> None is preserved exactly: numeric columns hold np.float32, which is
+    NOT a Python float, so the isinstance check this logic originally used
+    never fired and NaN leaked into the JSON on the NULL path. isna() is the
+    check that actually works, applied per column.
+    """
+    columns: dict[str, list] = {}
+    for k in f.FEATURES:
+        col = x[k]
+        na = col.isna().to_numpy()
+        if k in f.CATEGORICAL_FEATURES:
+            vals = [None if n else str(v) for v, n in zip(col.to_numpy(), na, strict=True)]
+        else:
+            vals = [None if n else float(v) for v, n in zip(col.to_numpy(), na, strict=True)]
+        columns[k] = vals
+    keys = list(f.FEATURES)
+    return [dict(zip(keys, row, strict=True)) for row in zip(*columns.values(), strict=True)]

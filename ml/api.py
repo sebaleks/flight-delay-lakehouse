@@ -213,7 +213,7 @@ def demo_ord(target_date: date | None = None) -> list[dict]:
     ]
     if not flights:
         raise HTTPException(404, f"no proxy schedule found for {proxy_day}")
-    results = predict(ctx, flights)
-    for r in results:
-        r.pop("features", None)  # keep the batch response compact
-    return results
+    # include_features=False, not a post-hoc pop: building the 51-key block for
+    # ~850 flights and then discarding it was the dominant per-flight cost in
+    # the response path
+    return predict(ctx, flights, include_features=False)
