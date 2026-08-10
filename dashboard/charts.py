@@ -358,3 +358,73 @@ def reliability(
     fig.update_yaxes(range=[0, 1], tickformat=".0%", title="what actually happened")
     fig.update_layout(legend=dict(orientation="h", y=1.12, x=0))
     return _style(fig, height)
+
+
+def ops_banks(
+    banks: pd.DataFrame,
+    *,
+    title: str,
+    height: int = 420,
+) -> go.Figure:
+    """Expected vs actual delayed departures per bank, with the model's own band.
+
+    The band is ±2·sd where sd = √Σp(1−p) — the Poisson-binomial spread the
+    calibrated probabilities themselves imply, assuming independence within
+    the hour (shared shocks make the truth wider; the page says so). Actual
+    counts overlay as points: inside the band the model called the bank,
+    outside it something the features don't carry happened. An optional
+    `baseline` column draws what history alone would have predicted for the
+    same schedule.
+
+    Columns: hour, expected, sd, actual, and optionally baseline.
+    """
+    hours = banks["hour"]
+    upper = banks["expected"] + 2 * banks["sd"]
+    lower = (banks["expected"] - 2 * banks["sd"]).clip(lower=0)
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=pd.concat([hours, hours[::-1]]),
+            y=pd.concat([upper, lower[::-1]]),
+            fill="toself",
+            fillcolor="rgba(46, 134, 171, 0.18)",  # COLOR_OK at low alpha
+            line=dict(width=0),
+            name="model band (±2sd)",
+            hoverinfo="skip",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=hours,
+            y=banks["expected"],
+            mode="lines+markers",
+            line=dict(color=ui.COLOR_OK, width=2),
+            name="model expected (Σp)",
+            hovertemplate="%{x}:00 — expected %{y:.1f}<extra></extra>",
+        )
+    )
+    if "baseline" in banks.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=hours,
+                y=banks["baseline"],
+                mode="lines",
+                line=dict(color=ui.COLOR_TEXT, width=1.5, dash="dot"),
+                name="history-implied",
+                hovertemplate="%{x}:00 — history-implied %{y:.1f}<extra></extra>",
+            )
+        )
+    fig.add_trace(
+        go.Scatter(
+            x=hours,
+            y=banks["actual"],
+            mode="markers",
+            marker=dict(color=ui.COLOR_DELAY, size=9, symbol="diamond"),
+            name="actually delayed",
+            hovertemplate="%{x}:00 — actual %{y}<extra></extra>",
+        )
+    )
+    fig.update_xaxes(title="scheduled departure hour (local)", dtick=2)
+    fig.update_yaxes(title="delayed departures (arr ≥ 15 min)", rangemode="tozero")
+    fig.update_layout(title=title, legend=dict(orientation="h", y=1.1, x=0))
+    return _style(fig, height)

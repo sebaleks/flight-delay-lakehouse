@@ -26,6 +26,7 @@ VIEWS: dict[str, str] = {
     "dash_delays_by_time": "year × month × day-of-week × dep-hour",
     "dash_monthly_trend": "1 row / calendar month",
     "dash_route_drilldown": "1 row / directed route",
+    "dash_airport_hour_baseline": "airport × day-of-week × dep-hour",
 }
 
 
@@ -63,6 +64,10 @@ def monthly_trend() -> pd.DataFrame:
 
 def route_drilldown() -> pd.DataFrame:
     return load_view("dash_route_drilldown")
+
+
+def airport_hour_baseline() -> pd.DataFrame:
+    return load_view("dash_airport_hour_baseline")
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)

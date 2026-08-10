@@ -55,9 +55,16 @@ def _predict_flight() -> None:
     predict_flight.render()
 
 
+def _ops_capacity() -> None:
+    from dashboard.views import ops_capacity
+
+    ops_capacity.render()
+
+
 PAGES = [
     st.Page(_overview, title="Overview", icon="🏠", default=True),
     st.Page(_predict_flight, title="Will my flight be late?", icon="🔮"),
+    st.Page(_ops_capacity, title="Ops capacity replay", icon="📡"),
     st.Page(_map, title="Delay map", icon="🗺️"),
     st.Page(_reliability, title="Who is reliable?", icon="🏆"),
     st.Page(_timing, title="When do delays happen?", icon="🕒"),
