@@ -77,18 +77,39 @@ the smoothing formula lives in exactly one place (`int_historical_delay_rates`)
 and serving reproduces training values byte-for-byte. Materializing the same
 query preserves that; rewriting the arithmetic would have destroyed it.
 
-Verified with a golden-vector harness: 184 requests spanning both rotation paths,
-both density paths, and four deliberately-unknown entities, scored before and
-after.
+Verified with the golden-vector harness committed as `ml/parity.py`: 184 requests
+spanning both rotation paths, both density paths, and four deliberately-unknown
+entities, scored before and after.
 
-- **30 of 30 requests that supplied both rotation context and density are
+```
+uv run --extra ml --extra serve --extra ingestion python -m ml.parity capture before.json
+uv run --extra ml python -m ml.parity compare before.json after.json --expect-medians-change
+```
+
+- **28 of 28 requests that supplied both rotation context and density are
   bit-identical** — every one of the 51 features, the calibrated probability, and
-  the expected delay minutes.
-- The remaining 154 requests depend on values that changed deliberately (below).
-  149 of them were unchanged anyway; 5 moved, and the **only** features that
+  the expected delay minutes. Those requests touch neither the typical profile
+  nor the density medians, so they are the clean test of the refactor.
+- The remaining 156 requests depend on values that changed deliberately (below).
+  151 of them were unchanged anyway; 5 moved, and the **only** features that
   differed across the whole run were the four the change touches:
   `inbound_distance`, `sched_turnaround_min`, `sched_turnaround_slack_min`,
-  `origin_dep_density_hour`. Mean |Δp| 0.0006, max 0.0668.
+  `origin_dep_density_hour`. Mean |Δp| 0.00049, max 0.0668.
+
+The harness enforces both halves rather than printing them: it exits non-zero on
+any difference by default, and under `--expect-medians-change` it still fails if
+a request that supplied its own context moved, or if a moved feature is one the
+medians cannot reach (a `hist_route_*` value, say). Verified against doctored
+fixtures in all three directions.
+
+*Harness note:* the first version of this harness sampled its flights with
+`any_value()` per column over a `(carrier, origin, dest, dep_time)` group. That
+is the same defect described below — a group spans many dates, so each column
+could come from a different flight, and the picks could differ between two
+captures of identical code, producing false regressions. It now takes every
+field from one deterministically-chosen row (`row_number()` over a total order).
+The numbers above are from the corrected harness; two captures of identical code
+are bit-identical.
 
 ## The bug this surfaced: the old typical profile was not deterministic
 
