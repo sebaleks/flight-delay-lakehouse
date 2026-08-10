@@ -13,7 +13,7 @@ import streamlit as st
 
 st.set_page_config(
     page_title="Flight-Delay Lakehouse",
-    page_icon="✈️",
+    page_icon=None,
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -92,7 +92,7 @@ def main() -> None:
 
         fresh = data.gold_freshness()
         if fresh is not None:
-            st.caption(f"🕒 Data as of {fresh:%b %d, %Y %H:%M} UTC")
+            st.caption(f"Data as of {fresh:%b %d, %Y %H:%M} UTC")
     st.navigation(PAGES).run()
 
 

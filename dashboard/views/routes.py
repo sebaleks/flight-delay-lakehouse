@@ -12,6 +12,7 @@ import pandas as pd
 import streamlit as st
 
 from dashboard import charts, data, metrics, ui
+from dashboard import flights as fl
 
 
 def _airport_options(df: pd.DataFrame, key_col: str, name_col: str) -> dict[str, str]:
@@ -142,6 +143,12 @@ def _render_airline_breakdown(df) -> None:
         st.info("No airline breakdown for the current filters.")
         return
 
+    names = {
+        r["carrier_key"]: fl.carrier_label(
+            r["carrier_key"], r.get("carrier_name"), bool(r.get("is_regional"))
+        )
+        for _, r in data.carrier_reliability().iterrows()
+    }
     adj = metrics.mix_adjusted(rc, "carrier_key", "route").sort_values("n_flights", ascending=False)
     adj["share"] = metrics.share_of(adj)
 
@@ -154,7 +161,7 @@ def _render_airline_breakdown(df) -> None:
     ui.floating_rows(
         [
             {
-                "carrier": r["carrier_key"],
+                "carrier": names.get(r["carrier_key"], r["carrier_key"]),
                 "share": ui.pct(r["share"], 0),
                 "legs": ui.count(r["n_flights"]),
                 "rate": ui.pct(r["rate"]),
@@ -182,6 +189,7 @@ def _render_airline_breakdown(df) -> None:
             st.caption(
                 f"**vs its route mix**: 1.00x = exactly as the routes that airline flies "
                 f"would predict; above 1 is worse than its routes explain. "
-                f"Highest here is **{worst['carrier_key']}** at {worst['index']:.2f}x. "
+                f"Highest here is **{names.get(worst['carrier_key'], worst['carrier_key'])}** "
+                f"at {worst['index']:.2f}x. "
                 "Read it alongside share and legs — a small carrier's number moves easily."
             )

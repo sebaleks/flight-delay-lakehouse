@@ -9,6 +9,8 @@ select
     rc.origin_airport_key,
     rc.dest_airport_key,
     rc.carrier_key,
+    carrier.carrier_name,
+    carrier.is_regional,
     carrier.dot_id,
     rc.n_flights,
     rc.n_with_arr_outcome,

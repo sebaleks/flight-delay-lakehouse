@@ -33,7 +33,7 @@ def count(x: float | int | None) -> str:
     return f"{int(x):,}"
 
 
-def download_button(df: pd.DataFrame, filename: str, label: str = "⬇ Download CSV") -> None:
+def download_button(df: pd.DataFrame, filename: str, label: str = "Download CSV") -> None:
     """Offer the current (filtered) table as a CSV — the curated gold layer,
     served as data to the consumer, not just pixels."""
     st.download_button(

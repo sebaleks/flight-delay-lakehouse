@@ -55,7 +55,14 @@ def render() -> None:
         r["airport_key"]: fl.airport_label(r["airport_key"], r["airport_name"])
         for _, r in airports.iterrows()
     }
-    carriers = sorted(data.carrier_reliability()["carrier_key"].dropna().unique())
+    cdf = data.carrier_reliability()
+    carrier_labels = {
+        r["carrier_key"]: fl.carrier_label(
+            r["carrier_key"], r.get("carrier_name"), bool(r.get("is_regional"))
+        )
+        for _, r in cdf.iterrows()
+    }
+    carriers = sorted(carrier_labels)
 
     w1, w2 = st.columns(2)
     origin = w1.selectbox(
@@ -63,7 +70,11 @@ def render() -> None:
         ["All airports", *sorted(airport_labels)],
         format_func=lambda c: "All airports" if c == "All airports" else airport_labels.get(c, c),
     )
-    carrier = w2.selectbox("Airline", ["All airlines", *carriers])
+    carrier = w2.selectbox(
+        "Airline",
+        ["All airlines", *carriers],
+        format_func=lambda c: "All airlines" if c == "All airlines" else carrier_labels.get(c, c),
+    )
     origin = None if origin == "All airports" else origin
     carrier = None if carrier == "All airlines" else carrier
 
@@ -90,7 +101,7 @@ def render() -> None:
     scope = " · ".join(
         [
             airport_labels.get(origin, origin) if origin else "All airports",
-            carrier if carrier else "All airlines",
+            carrier_labels.get(carrier, carrier) if carrier else "All airlines",
         ]
     )
     st.caption(f"Showing: **{scope}** — {int(df['n_flights'].sum()):,} flights")

@@ -98,7 +98,7 @@ def main() -> None:
         print(report.to_string(index=False))
     n_fail = int((~report["ok"]).sum())
     print(
-        f"\n{'✅ ALL CHECKS PASSED' if n_fail == 0 else f'❌ {n_fail} CHECK(S) FAILED'} "
+        f"\n{'ALL CHECKS PASSED' if n_fail == 0 else f'{n_fail} CHECK(S) FAILED'} "
         f"({len(report)} total)"
     )
     sys.exit(1 if n_fail else 0)

@@ -14,7 +14,7 @@ from dashboard import data, metrics, ui
 
 
 def render() -> None:
-    st.title("✈️ US Flight-Delay Lakehouse")
+    st.title("US Flight-Delay Lakehouse")
     st.caption(
         "Curated gold layer, served live from BigQuery. US domestic on-time "
         "performance (BTS), 2022–2024 — one row per flight leg upstream, "

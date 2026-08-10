@@ -1,0 +1,18 @@
+carrier_key,carrier_name,is_regional
+9E,Endeavor Air,true
+AA,American Airlines,false
+AS,Alaska Airlines,false
+B6,JetBlue Airways,false
+DL,Delta Air Lines,false
+F9,Frontier Airlines,false
+G4,Allegiant Air,false
+HA,Hawaiian Airlines,false
+MQ,Envoy Air,true
+NK,Spirit Airlines,false
+OH,PSA Airlines,true
+OO,SkyWest Airlines,true
+QX,Horizon Air,true
+UA,United Airlines,false
+WN,Southwest Airlines,false
+YV,Mesa Airlines,true
+YX,Republic Airways,true

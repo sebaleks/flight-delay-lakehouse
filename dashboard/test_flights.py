@@ -185,3 +185,21 @@ def test_long_layover_is_an_upper_bound_not_an_estimate():
 def test_slack_inside_the_measured_range_is_not_an_upper_bound():
     r = connection_risk("12:00", "14:00", BINS, 0.85)  # slack 90, measured exactly
     assert r.upper_bound is False
+
+
+def test_carrier_label_names_the_airline_and_marks_regionals():
+    from dashboard.flights import carrier_label
+
+    assert carrier_label("UA", "United Airlines") == "United Airlines (UA)"
+    # a passenger books "American" and flies Envoy — the dropdown must say so
+    assert carrier_label("MQ", "Envoy Air", True) == "Envoy Air (MQ) - regional"
+    # missing name must never render an empty option
+    assert carrier_label("ZZ", None) == "ZZ"
+    assert carrier_label("ZZ", "") == "ZZ"
+
+
+def test_carrier_code_round_trips_including_the_regional_suffix():
+    from dashboard.flights import carrier_label, code_from_label
+
+    for code, name, reg in [("UA", "United Airlines", False), ("MQ", "Envoy Air", True)]:
+        assert code_from_label(carrier_label(code, name, reg)) == code

@@ -62,6 +62,18 @@ def _board(url: str, origin: str, day: date) -> dict:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
+def _carrier_names() -> dict[str, str]:
+    """code -> 'United Airlines (UA)', from the already-cached gold view."""
+    df = data.carrier_reliability()
+    return {
+        r["carrier_key"]: fl.carrier_label(
+            r["carrier_key"], r.get("carrier_name"), bool(r.get("is_regional"))
+        )
+        for _, r in df.iterrows()
+    }
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
 def _airport_names() -> dict[str, str]:
     """code -> 'Full Name (CODE)', from the already-cached gold view."""
     df = data.airport_reliability()
@@ -101,7 +113,13 @@ def _pick_flight(url: str, key: str, title: str, origin_default: str, day: date)
     dests = sorted({f["dest"] for f in rows})
 
     c1, c2, c3 = st.columns([1, 2, 1])
-    carrier = c1.selectbox("Airline", ["Any", *carriers], key=f"{key}_carrier")
+    cnames = _carrier_names()
+    carrier = c1.selectbox(
+        "Airline",
+        ["Any", *carriers],
+        format_func=lambda c: "Any" if c == "Any" else cnames.get(c, c),
+        key=f"{key}_carrier",
+    )
     dest = c2.selectbox(
         "Going to",
         ["Any", *dests],
@@ -131,12 +149,15 @@ def _pick_flight(url: str, key: str, title: str, origin_default: str, day: date)
     if not shown:
         st.warning("No flights match those filters. Try clearing one.")
         return None
+    # ALWAYS show a list. Hiding it until the filters are narrow enough left
+    # the page with nothing to select from on arrival, which is the opposite of
+    # the point — the list IS the interface, the filters just shorten it.
+    listed = shown[:MAX_LISTED]
     if len(shown) > MAX_LISTED:
-        st.info(
-            f"{len(shown)} flights is too many to show — pick an airline, a "
-            "destination or a departure window to narrow the list."
+        st.caption(
+            f"Showing the first {MAX_LISTED} — add an airline, a destination or "
+            "a departure window to see the rest."
         )
-        return None
 
     # A LIST, not a spreadsheet: exactly len(shown) rows, no grid, no empty
     # filler. Each row carries its own select button, so picking is one click
@@ -149,9 +170,10 @@ def _pick_flight(url: str, key: str, title: str, origin_default: str, day: date)
         unsafe_allow_html=True,
     )
     picked_key = f"{key}_picked"
-    for i, f in enumerate(shown):
+    for i, f in enumerate(listed):
         c1, c2, c3, c4, c5 = st.columns([1.1, 2.4, 1, 1, 0.9])
         c1.markdown(f"**{f['carrier']} {f['flight_number']}**")
+        # airline name under the code, so the row reads without a legend
         c2.markdown(names.get(f["dest"], f["dest"]))
         c3.markdown(f["dep_time"])
         c4.markdown(f["arr_time"])
@@ -161,7 +183,7 @@ def _pick_flight(url: str, key: str, title: str, origin_default: str, day: date)
     chosen = st.session_state.get(picked_key)
     if chosen and any(
         c["carrier"] == chosen["carrier"] and c["flight_number"] == chosen["flight_number"]
-        for c in shown
+        for c in shown  # the full filtered set, not just the listed page
     ):
         st.success(
             f"Selected **{chosen['carrier']} {chosen['flight_number']}** — "

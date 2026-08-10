@@ -30,8 +30,23 @@ def airport_label(code: str, name: str | None = None, city: str | None = None) -
     return code
 
 
+def carrier_label(code: str, name: str | None = None, is_regional: bool = False) -> str:
+    """'United Airlines (UA)', or 'Envoy Air (MQ) - regional'.
+
+    Same shape as airport_label: name first, code always present because the
+    code is what appears on a booking. Regionals are marked because a passenger
+    books "American" and flies Envoy — without the marker a dropdown implies
+    seven independent airlines where a traveller sees three brands.
+    """
+    if not name or not str(name).strip():
+        return code
+    label = f"{str(name).strip()} ({code})"
+    return f"{label} - regional" if is_regional else label
+
+
 def code_from_label(label: str) -> str:
     """'San Francisco International Airport (SFO)' -> 'SFO'."""
+    label = label.split(" - regional")[0].strip()
     if label.endswith(")") and "(" in label:
         return label.rsplit("(", 1)[1].rstrip(")").strip()
     return label.strip()
