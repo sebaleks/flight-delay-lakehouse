@@ -265,3 +265,96 @@ def grouped_rate_bar_h(
     fig.update_yaxes(title=None, categoryorder="array", categoryarray=order)
     fig.update_layout(legend_title_text=None, legend=dict(orientation="h", y=1.08, x=0))
     return _style(fig, height)
+
+
+def probability_vs_base_rate(
+    p: float,
+    *,
+    base_rate: float,
+    weather_known: bool = True,
+    height: int = 150,
+) -> go.Figure:
+    """One flight's probability against the population rate.
+
+    Deliberately NOT a gauge. A needle sitting in a red zone is a verdict
+    wearing a probability costume; a bar on a 0-100% axis with the base rate
+    marked lets the reader see BOTH how likely it is and how that compares,
+    which is the only honest framing of a single calibrated number.
+
+    weather_known=False desaturates the bar: an estimate made with all twelve
+    weather features missing must not render with the same visual confidence as
+    a weather-informed one.
+    """
+    fig = go.Figure()
+    fig.add_trace(
+        go.Bar(
+            x=[p],
+            y=[""],
+            orientation="h",
+            marker_color=ui.COLOR_DELAY if weather_known else ui.COLOR_ACCENT,
+            marker_opacity=1.0 if weather_known else 0.45,
+            hovertemplate="modelled probability %{x:.0%}<extra></extra>",
+            showlegend=False,
+        )
+    )
+    # the base rate as a reference line + label, so the comparison is visual
+    fig.add_vline(
+        x=base_rate,
+        line_width=2,
+        line_dash="dot",
+        line_color=ui.COLOR_TEXT,
+        annotation_text=f"typical flight ({base_rate:.0%})",
+        annotation_position="top",
+        annotation_font_size=12,
+    )
+    fig.update_xaxes(range=[0, 1], tickformat=".0%", title=None)
+    fig.update_yaxes(showticklabels=False, title=None)
+    fig.update_layout(bargap=0.45, showlegend=False)
+    return _style(fig, height)
+
+
+def reliability(
+    bands: pd.DataFrame,
+    *,
+    highlight_lo: float | None = None,
+    height: int = 340,
+) -> go.Figure:
+    """Predicted vs actual per band on the held-out set — the evidence panel.
+
+    A perfectly calibrated model puts every bar on the diagonal. highlight_lo
+    marks the band the user's own flight falls in, which is what turns a generic
+    model-quality chart into an answer to "should I believe THIS number?".
+    """
+    mid = (bands["lo"] + bands["hi"]) / 2
+    colors = [
+        ui.COLOR_DELAY if (highlight_lo is not None and lo == highlight_lo) else ui.COLOR_OK
+        for lo in bands["lo"]
+    ]
+    fig = go.Figure()
+    fig.add_trace(
+        go.Bar(
+            x=mid,
+            y=bands["frac_pos"],
+            marker_color=colors,
+            name="actually delayed",
+            customdata=bands[["n"]].to_numpy(),
+            hovertemplate=(
+                "we said ~%{x:.0%}<br>actually delayed %{y:.1%}"
+                "<br>%{customdata[0]:,} flights<extra></extra>"
+            ),
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=[0, 1],
+            y=[0, 1],
+            mode="lines",
+            line=dict(dash="dot", color=ui.COLOR_TEXT, width=2),
+            name="perfect calibration",
+            hoverinfo="skip",
+        )
+    )
+    fig.update_xaxes(range=[0, 1], tickformat=".0%", title="what the model said")
+    fig.update_yaxes(range=[0, 1], tickformat=".0%", title="what actually happened")
+    fig.update_layout(legend=dict(orientation="h", y=1.12, x=0))
+    return _style(fig, height)

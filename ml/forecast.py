@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import re
 from datetime import datetime, timedelta
 
@@ -59,9 +60,30 @@ import requests
 log = logging.getLogger("ml.forecast")
 
 API_ROOT = "https://api.weather.gov"
-# NWS asks for an identifying User-Agent
+
+
+def _user_agent() -> str:
+    """NWS asks for a User-Agent that identifies the client AND gives them a way
+    to reach you if it misbehaves; they use it to contact operators before
+    throttling. A bare app name with no contact does not meet that ask, which is
+    fine for a laptop but not for a deployed service making bulk requests.
+
+    Set NWS_CONTACT_EMAIL. Unset falls back to the old string with an explicit
+    'no contact' marker and a warning, so a misconfigured deploy is visible in
+    the logs rather than silently rude.
+    """
+    contact = os.environ.get("NWS_CONTACT_EMAIL", "").strip()
+    if not contact:
+        log.warning(
+            "NWS_CONTACT_EMAIL is unset — api.weather.gov asks for a contactable "
+            "User-Agent. Set it before running this as a deployed service."
+        )
+        return "flight-delay-lakehouse (no contact configured)"
+    return f"flight-delay-lakehouse ({contact})"
+
+
 HEADERS = {
-    "User-Agent": "flight-delay-lakehouse (course project)",
+    "User-Agent": _user_agent(),
     "Accept": "application/geo+json",
 }
 TIMEOUT = (10, 30)

@@ -11,8 +11,12 @@ Run locally:
 
 from __future__ import annotations
 
+import json
+import logging
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
+from functools import lru_cache
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException
@@ -20,6 +24,8 @@ from google.cloud import bigquery
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ml.serving import FlightRequest, ServingContext, build_context, predict
+
+log = logging.getLogger("ml.api")
 
 _ctx: ServingContext | None = None
 
@@ -140,6 +146,85 @@ def _ctx_or_503() -> ServingContext:
     return _ctx
 
 
+@lru_cache(maxsize=8)
+def _artifact_json(artifacts_dir: str, name: str) -> dict | None:
+    """Read a side-metadata file out of the artifacts run, or None.
+
+    These are REPORTS, not part of the model contract: load_models requires
+    exactly the four model files, and a run written before this metadata
+    existed must still serve predictions. So a missing file degrades to null
+    rather than failing startup. Cached — the files never change for a run.
+    """
+    path = Path(artifacts_dir) / name
+    if not path.is_file():
+        log.warning("%s not found in %s — endpoint will return null", name, artifacts_dir)
+        return None
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError) as exc:
+        log.warning(
+            "%s in %s is unreadable (%s) — endpoint will return null", name, artifacts_dir, exc
+        )
+        return None
+
+
+@app.get("/calibration")
+def calibration() -> dict:
+    """Held-out reliability: when the model says p, how often is it delayed?
+
+    Straight out of the shipped run's metrics.json — 10 equal-width bands over
+    the full 3,561,782-row held-out test set, computed at training time by
+    ml/calibration.py. A consumer UI renders this as the evidence behind its
+    probability; it is not recomputed per request and never touches the mart.
+    """
+    ctx = _ctx_or_503()
+    m = _artifact_json(str(ctx.models.artifacts_dir), "metrics.json")
+    if m is None:
+        return {"available": False, "reason": "metrics.json absent from the artifacts run"}
+    platt = m.get("calibration", {}).get("test", {}).get("platt", {})
+    split = m.get("split", {})
+    return {
+        "available": True,
+        "artifacts": ctx.models.artifacts_dir.name,
+        "calibration_method": m.get("calibration", {}).get("serving_method"),
+        "n_test": split.get("n_test"),
+        # metrics.json records the split BOUNDARY, not the mart's end date, so
+        # only the start is reported here rather than inventing a window end.
+        # /outcome-mix carries the observed [min, max] of the same rows.
+        "test_start": split.get("test_date_min"),
+        "train_end": split.get("train_date_max"),
+        "base_rate": m.get("baselines", {}).get("test_delay_base_rate"),
+        "roc_auc": m.get("xgb_classifier", {}).get("roc_auc"),
+        "pr_auc": m.get("xgb_classifier", {}).get("pr_auc"),
+        "brier": platt.get("brier"),
+        "ece": platt.get("ece"),
+        # [{lo, hi, n, mean_pred, frac_pos}] — predicted vs actual per band
+        "reliability": platt.get("reliability"),
+    }
+
+
+@app.get("/outcome-mix")
+def outcome_mix() -> dict:
+    """Held-out P(arrival delay >= t) per probability band.
+
+    The honest answer to "how late might I be?" — empirical, from flights the
+    model never trained on. A consumer UI shows this INSTEAD of the regressor's
+    point estimate, whose held-out MAE (18.99 min) and RMSE (49.26) make a
+    single number misleading. Bands match /calibration exactly, so a flight
+    sits in the same band on both panels.
+
+    Built by ml/exceedance.py; see its header.
+    """
+    ctx = _ctx_or_503()
+    table = _artifact_json(str(ctx.models.artifacts_dir), "exceedance.json")
+    if table is None:
+        return {
+            "available": False,
+            "reason": "exceedance.json absent — run `python -m ml.exceedance` for this run",
+        }
+    return {"available": True, **table}
+
+
 @app.get("/health")
 def health() -> dict:
     ctx = _ctx_or_503()
@@ -158,35 +243,69 @@ def predict_batch(batch: BatchIn) -> list[dict]:
     return predict(ctx, [FlightRequest(**fl.model_dump()) for fl in batch.flights])
 
 
-@app.get("/demo/ord-departures")
-def demo_ord(target_date: date | None = None) -> list[dict]:
-    """Batch demo: 'all of tomorrow's scheduled ORD departures'.
+@app.get("/demo/airport-departures")
+@app.get("/demo/ord-departures")  # original path, kept so existing callers work
+def demo_airport(origin: str = "ORD", target_date: date | None = None) -> list[dict]:
+    """Batch demo: 'all of tomorrow's scheduled departures' from one airport.
 
     HONEST PROXY: we hold no source of FUTURE airline schedules (that is an
-    OAG/airline-feed product). The demo re-dates the historical ORD schedule
-    from the same weekday 104 weeks earlier (inside the 2022-2024 mart
-    window) to the target date — a realistic schedule shape, clearly labeled
-    a proxy. A production deployment would swap in a real schedule feed; the
-    prediction path is identical either way. The proxy includes its
+    OAG/airline-feed product). The demo re-dates a historical schedule from the
+    same weekday to the target date — a realistic schedule shape, clearly
+    labeled a proxy. A production deployment would swap in a real schedule
+    feed; the prediction path is identical either way. The proxy includes its
     historical ROTATION structure (positions, turnarounds, density) — all
-    schedule-derived, passed through as the rotation context a planning
-    feed would provide.
+    schedule-derived, passed through as the rotation context a planning feed
+    would provide.
+
+    The proxy day is LOOKED UP, not computed from a fixed offset. The original
+    version subtracted a literal 104 weeks, which silently stops landing inside
+    the 2022-2024 mart once target dates pass ~2026-12-30 — every call would
+    404. Selecting the most recent in-mart date with the same weekday AT THIS
+    ORIGIN is self-healing, always has flights, and preserves the weekday shape
+    that makes the schedule realistic.
     """
     ctx = _ctx_or_503()
-    # "tomorrow" in ORD's own timezone — a UTC deployment queried overnight
-    # must not target the wrong calendar day
-    target = target_date or (datetime.now(ZoneInfo("America/Chicago")).date() + timedelta(days=1))
-    proxy_day = target - timedelta(weeks=104)  # same weekday, in-mart
+    origin = origin.upper()
+    if origin not in ctx.airports.index:
+        raise HTTPException(404, f"unknown origin {origin!r}")
+    # "tomorrow" in the ORIGIN's own timezone — a UTC deployment queried
+    # overnight must not target the wrong calendar day
+    tz = ctx.airports.loc[origin]["tz"]
+    target = target_date or (
+        datetime.now(ZoneInfo(tz if isinstance(tz, str) and tz else "UTC")).date()
+        + timedelta(days=1)
+    )
+    params = [
+        bigquery.ScalarQueryParameter("origin", "STRING", origin),
+        bigquery.ScalarQueryParameter("target", "DATE", target),
+    ]
+    proxy_rows = list(
+        ctx.bq.query(
+            f"select max(flight_date) as proxy_day "
+            f"from `{ctx.bq.project}.{ctx.gold}.ml_flight_features` "
+            f"where origin = @origin "
+            # same weekday as the target; both sides use BigQuery's own
+            # convention so no 1=Monday/1=Sunday mismatch is possible
+            f"and extract(dayofweek from flight_date) = extract(dayofweek from @target)",
+            job_config=bigquery.QueryJobConfig(query_parameters=params),
+        ).result()
+    )
+    proxy_day = proxy_rows[0]["proxy_day"] if proxy_rows else None
+    if proxy_day is None:
+        raise HTTPException(404, f"no in-mart schedule for {origin} on that weekday")
     rows = ctx.bq.query(
         f"select carrier, dest, format_time('%H:%M', crs_dep_time) as dep_time, "
         f"cast(crs_arr_hour as int64) as arr_hour, any_value(distance) as distance, "
         f"any_value(struct(rotation_position, legs_today, sched_turnaround_min, "
         f"inbound_distance, inbound_crs_elapsed_min, origin_dep_density_hour)) as rot "
         f"from `{ctx.bq.project}.{ctx.gold}.ml_flight_features` "
-        f"where origin = 'ORD' and flight_date = @d "
+        f"where origin = @origin and flight_date = @d "
         f"group by carrier, dest, dep_time, arr_hour",
         job_config=bigquery.QueryJobConfig(
-            query_parameters=[bigquery.ScalarQueryParameter("d", "DATE", proxy_day)]
+            query_parameters=[
+                bigquery.ScalarQueryParameter("origin", "STRING", origin),
+                bigquery.ScalarQueryParameter("d", "DATE", proxy_day),
+            ]
         ),
     ).result()
 
@@ -195,7 +314,7 @@ def demo_ord(target_date: date | None = None) -> list[dict]:
 
     flights = [
         FlightRequest(
-            origin="ORD",
+            origin=origin,
             dest=r["dest"],
             carrier=r["carrier"],
             flight_date=target,

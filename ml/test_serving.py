@@ -109,3 +109,55 @@ def test_turnaround_band_mirrors_the_sql(has_inbound, turnaround, expected):
     """Pins the Python mirror of int_aircraft_rotation.sql's band CASE. The SQL
     side is pinned by assert_ml_rotation_schedule_only; this is the other half."""
     assert _turnaround_band(has_inbound, turnaround) == expected
+
+
+def test_departure_utc_precision(monkeypatch):
+    """The past/future decision must keep MINUTES; the weather bucket truncates.
+
+    The bug: at 17:05 local, a flight scheduled 17:30 truncated to 17:00 and came
+    back flight_in_past=true — so a consumer UI told to hard-gate on that value
+    would hide a valid pre-departure prediction for up to 59 minutes before every
+    single departure.
+    """
+    import datetime as dt
+
+    import pandas as pd
+
+    from ml.serving import ServingContext, _departure_utc
+
+    ctx = ServingContext(
+        models=None,  # type: ignore[arg-type]
+        bq=None,  # type: ignore[arg-type]
+        gold="g",
+        airports=pd.DataFrame(
+            {"latitude": [41.98], "longitude": [-87.9], "tz": ["America/Chicago"]},
+            index=pd.Index(["ORD"], name="iata"),
+        ),
+    )
+    d = dt.date(2026, 8, 12)
+    exact = _departure_utc(ctx, "ORD", d, "17:30")
+    bucket = _departure_utc(ctx, "ORD", d, "17:30", hour_only=True)
+    assert exact is not None and bucket is not None
+    assert exact - bucket == dt.timedelta(minutes=30)
+    assert bucket.minute == 0
+    # and the whole point: at 17:05 the 17:30 flight is still in the future
+    now_1705 = _departure_utc(ctx, "ORD", d, "17:05")
+    assert now_1705 is not None and now_1705 < exact
+
+
+def test_departure_utc_unknown_airport_is_none():
+    import datetime as dt
+
+    import pandas as pd
+
+    from ml.serving import ServingContext, _departure_utc
+
+    ctx = ServingContext(
+        models=None,  # type: ignore[arg-type]
+        bq=None,  # type: ignore[arg-type]
+        gold="g",
+        airports=pd.DataFrame(
+            {"latitude": [], "longitude": [], "tz": []}, index=pd.Index([], name="iata")
+        ),
+    )
+    assert _departure_utc(ctx, "XXX", dt.date(2026, 8, 12), "17:30") is None

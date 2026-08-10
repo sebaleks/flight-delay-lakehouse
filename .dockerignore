@@ -1,10 +1,18 @@
-# Keep the build context to exactly what the Dockerfile copies.
+# Keep the build context to exactly what the Dockerfiles copy.
 *
 !Dockerfile
+!Dockerfile.predictor
 !pyproject.toml
 !uv.lock
 !dashboard
 !ingestion
+!ml
+# ml/artifacts/ is ~15 GB of LOCAL training runs. The predictor image bakes in
+# exactly one PINNED run, which cloudbuild.predictor.yaml stages into
+# ml_artifacts/ — a separate name precisely so that un-ignoring ml/ here cannot
+# drag every local run into the context (of either image).
+ml/artifacts
+!ml_artifacts
 **/__pycache__
 .env
 .venv

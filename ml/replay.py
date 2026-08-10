@@ -46,7 +46,7 @@ IDENTITY = ["flight_date", "carrier", "flight_number", "origin", "dest"]
 
 def load_holdout(
     ctx: ServingContext,
-    sample: int = DEFAULT_SAMPLE,
+    sample: int | None = DEFAULT_SAMPLE,
     origin: str | None = None,
     flight_date: str | None = None,
 ) -> pd.DataFrame:
@@ -55,6 +55,11 @@ def load_holdout(
     Sampling is DETERMINISTIC (a fingerprint ordering, not RAND()) so a demo
     shows the same flights every run, and spreads across the whole test window
     instead of taking the first N calendar days.
+
+    sample=None loads the WHOLE held-out window (3,561,782 rows) with no LIMIT —
+    used by ml/exceedance.py, which needs every row for stable tail estimates
+    and is not a demo. Downcast to float32/category on arrival, as ml/data.py
+    does, or the frame is several GB of float64 and object strings.
     """
     # carrier / origin / dest / route are already FEATURES — re-selecting them
     # here would emit duplicate column names and make ORDER BY ambiguous
@@ -81,9 +86,15 @@ def load_holdout(
     sql = (
         f"select {cols} from `{ctx.bq.project}.{ctx.gold}.{MART_TABLE}` "
         f"where {' and '.join(where)} "
-        "order by farm_fingerprint(concat(cast(flight_date as string), carrier, "
-        "cast(flight_number as string), origin, dest, cast(crs_dep_time as string))) "
-        f"limit {int(sample)}"
+        # the fingerprint ordering is what makes a SAMPLE deterministic; with
+        # no limit it only costs a sort, so skip it when taking everything
+        + (
+            "order by farm_fingerprint(concat(cast(flight_date as string), carrier, "
+            "cast(flight_number as string), origin, dest, cast(crs_dep_time as string))) "
+            f"limit {int(sample)}"
+            if sample is not None
+            else ""
+        )
     )
     df = (
         ctx.bq.query(
@@ -97,6 +108,16 @@ def load_holdout(
     )
     if df.empty:
         raise SystemExit("no held-out rows matched those filters")
+    # downcast on arrival, as ml/data.py does — at the full 3.56M rows the
+    # float64 + object-string frame is several GB
+    for c in f.CATEGORICAL_FEATURES:
+        df[c] = df[c].astype("category")
+    for c in f.NUMERIC_FEATURES:
+        df[c] = (
+            df[c].astype("Float32").astype("float32")
+            if str(df[c].dtype) == "boolean"
+            else pd.to_numeric(df[c]).astype("float32")
+        )
     df["flight_date"] = pd.to_datetime(df["flight_date"])
     return df
 

@@ -1,0 +1,117 @@
+# Deploy the prediction API to Cloud Run.
+#
+# MANUAL, not a push-to-main trigger — unlike cloudbuild.yaml (the dashboard).
+# A deploy here is pinned to one artifact run, and which model is served is a
+# decision, not a consequence of merging. Run it deliberately:
+#
+#   uv run --extra ml --extra ingestion python -m ml.publish        # -> prints _RUN
+#   gcloud builds submit --config cloudbuild.predictor.yaml \
+#     --substitutions=_RUN=20260730_145241,_BUCKET=<your-bucket>
+#
+# PRIVATE (--no-allow-unauthenticated). The dashboard is public because it
+# serves pre-aggregated read-only views; an open /predict/batch is a free
+# compute amplifier anyone could point at thousands of flights. The dashboard's
+# runtime service account gets roles/run.invoker and mints an ID token via ADC.
+
+substitutions:
+  _RUN: ""          # artifact run id, e.g. 20260730_145241 — REQUIRED
+  _BUCKET: ""       # GCS bucket holding serving/<run>/ — REQUIRED
+  _REGION: us-central1
+  _SERVICE: flight-delay-predictor
+  _NWS_CONTACT: ""  # api.weather.gov asks for a contactable User-Agent
+  _BQ_GOLD_DATASET: flight_delays_gold
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8   # ~695 MB of artifacts + a 1 GB+ image layer
+  # belongs HERE, under options — at the build root Cloud Build rejects the
+  # whole config as an unknown top-level field and the deploy never starts
+  substitutionOption: ALLOW_LOOSE
+
+timeout: 2400s
+
+steps:
+  - id: check-substitutions
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -e
+        if [ -z "${_RUN}" ] || [ -z "${_BUCKET}" ]; then
+          echo "ERROR: _RUN and _BUCKET are required."
+          echo "  gcloud builds submit --config cloudbuild.predictor.yaml \\"
+          echo "    --substitutions=_RUN=<run-id>,_BUCKET=<bucket>"
+          exit 1
+        fi
+
+  # Stage the PINNED artifact run into the build context. Fails loudly if the
+  # prefix is missing rather than building an image with no model in it.
+  - id: fetch-artifacts
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -e
+        mkdir -p ml_artifacts/${_RUN}
+        # the marker is written LAST by ml/publish.py, so its presence means
+        # every file landed — refuse to bake a half-uploaded run into an image
+        gsutil -q stat "gs://${_BUCKET}/serving/${_RUN}/_PUBLISHED.json" || {
+          echo "ERROR: run ${_RUN} has no _PUBLISHED.json — it was never completely"
+          echo "published. Re-run: python -m ml.publish --run ${_RUN}"; exit 1; }
+        gsutil -m cp -r "gs://${_BUCKET}/serving/${_RUN}/*" "ml_artifacts/${_RUN}/"
+        for f in xgb_classifier.ubj xgb_regressor.ubj logreg_pipeline.joblib calibrator.joblib; do
+          test -s "ml_artifacts/${_RUN}/$f" || { echo "ERROR: $f missing from the run"; exit 1; }
+        done
+        du -sh ml_artifacts/${_RUN}
+
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - Dockerfile.predictor
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/${_SERVICE}:${_RUN}
+      - .
+
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/${_SERVICE}:${_RUN}
+
+  - id: deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_SERVICE}
+      - --image
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/${_SERVICE}:${_RUN}
+      - --region
+      - ${_REGION}
+      # 4 GiB: the two boosters deserialize to well over the 2 GiB default.
+      # concurrency 4 because scoring is CPU-bound and the models are shared
+      # in-process. min-instances 0 keeps the zero-idle-cost posture the rest of
+      # the project holds (docs/compute_choice.md) at the price of a ~20-40s
+      # cold start, which the UI states explicitly rather than hiding.
+      - --memory
+      - 4Gi
+      - --cpu
+      - "2"
+      - --concurrency
+      - "4"
+      - --timeout
+      - "300"
+      - --min-instances
+      - "0"
+      - --no-allow-unauthenticated
+      - --set-env-vars
+      - GCP_PROJECT_ID=$PROJECT_ID,BQ_GOLD_DATASET=${_BQ_GOLD_DATASET},NWS_CONTACT_EMAIL=${_NWS_CONTACT}
+
+
+images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/${_SERVICE}:${_RUN}

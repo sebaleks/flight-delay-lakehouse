@@ -952,9 +952,11 @@ dependencies = [
 
 [package.optional-dependencies]
 dashboard = [
+    { name = "google-auth" },
     { name = "google-cloud-bigquery-storage" },
     { name = "matplotlib" },
     { name = "plotly" },
+    { name = "requests" },
     { name = "streamlit" },
 ]
 ingestion = [
@@ -1011,6 +1013,7 @@ requires-dist = [
     { name = "dbt-bigquery", marker = "extra == 'transform'", specifier = ">=1.9,<2.0" },
     { name = "dbt-core", marker = "extra == 'transform'", specifier = ">=1.9,<2.0" },
     { name = "fastapi", marker = "extra == 'serve'", specifier = ">=0.115" },
+    { name = "google-auth", marker = "extra == 'dashboard'", specifier = ">=2.35" },
     { name = "google-cloud-bigquery", specifier = ">=3.25" },
     { name = "google-cloud-bigquery-storage", marker = "extra == 'dashboard'", specifier = ">=2.24" },
     { name = "google-cloud-bigquery-storage", marker = "extra == 'ml'", specifier = ">=2.24" },
@@ -1027,6 +1030,7 @@ requires-dist = [
     { name = "plotly", marker = "extra == 'dashboard'", specifier = ">=5.24" },
     { name = "pyarrow", specifier = ">=17.0" },
     { name = "python-dotenv", specifier = ">=1.0" },
+    { name = "requests", marker = "extra == 'dashboard'", specifier = ">=2.32" },
     { name = "requests", marker = "extra == 'ingestion'", specifier = ">=2.32" },
     { name = "requests", marker = "extra == 'serve'", specifier = ">=2.32" },
     { name = "scikit-learn", marker = "extra == 'ml'", specifier = ">=1.5" },

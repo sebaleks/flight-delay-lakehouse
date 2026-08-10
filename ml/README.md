@@ -367,3 +367,61 @@ echoes `probability_calibration: "platt"`. Calibration is monotonic, so the
 ranking is unchanged (ROC 0.7389 / PR-AUC 0.4652) while the served probability
 is trustworthy (held-out ECE 0.017). `logreg_baseline_probability` stays
 uncalibrated — a comparison anchor, not a shipped output.
+
+## Deploying the predictor (Cloud Run)
+
+The API is a **separate, private** Cloud Run service — deliberately not folded
+into the dashboard image. That image carries only `--extra dashboard`; adding
+xgboost plus ~695 MB of artifacts would put a model load on every cold start for
+every visitor who only wanted the delay map, force its memory up for all
+traffic, and let a bad artifact take the live BI app down. **`dashboard/` must
+never `import ml`** — it talks to the predictor over HTTP.
+
+```bash
+# 1. build the outcome-mix table for the run (once per training run)
+uv run --extra ml --extra ingestion python -m ml.exceedance
+
+# 2. publish the pinned artifact run to GCS (immutable; refuses to overwrite)
+uv run --extra ml --extra ingestion python -m ml.publish        # prints the _RUN id
+
+# 3. build + deploy that exact run
+gcloud builds submit --config cloudbuild.predictor.yaml \
+  --substitutions=_RUN=<run-id>,_BUCKET=$GCS_BUCKET,_NWS_CONTACT=you@example.com
+```
+
+**Deliberate choices, and their costs:**
+
+- **Manual deploy, not push-to-main.** Which model is served is a decision, not
+  a consequence of merging. The dashboard keeps its automatic trigger; this does
+  not.
+- **Pinned run, no `latest` alias.** An image is tied to one artifact set, so a
+  redeploy is reproducible and `/health`'s `artifacts` field actually identifies
+  the model. Artifacts are immutable once published.
+- **Private (`--no-allow-unauthenticated`).** The dashboard is public because it
+  serves pre-aggregated read-only views; an open `/predict/batch` is a free
+  compute amplifier. The dashboard's service account gets `roles/run.invoker`
+  and mints an ID token via ADC — no key file.
+- **`min-instances=0`.** Keeps the zero-idle-cost posture the rest of the
+  project holds (`docs/compute_choice.md`) at the price of a **~20-40s cold
+  start**, dominated by deserializing the boosters. The UI must show that
+  explicitly rather than a spinner that looks broken.
+- **Order matters:** the `serving_*` lookup tables must be built before a new
+  image is deployed against a dataset. Startup fails loudly if they are absent.
+
+### Endpoints
+
+| Route | What it is |
+|---|---|
+| `GET /health` | liveness + the artifact run being served |
+| `POST /predict`, `/predict/batch` | score flights; every response carries `prediction_basis` |
+| `GET /calibration` | held-out reliability table (predicted vs actual, 10 bands, 3,561,782 rows) |
+| `GET /outcome-mix` | held-out P(arrival delay ≥ t) per band, t ∈ {15,30,60,90,120} |
+| `GET /demo/airport-departures?origin=ORD` | proxy-schedule batch demo for any airport |
+
+**`prediction_basis`** is on every prediction and is the honest part of the
+response: `flight_in_past` (the API still scores a past date — debugging is a
+legitimate use — but a UI must refuse to present it as a forecast) and
+`weather_horizon` ∈ `forecast` / `beyond_horizon` / `past` / `unavailable`,
+which distinguishes the three ways the twelve weather features can be missing.
+Previously a past-date request returned a confident-looking number with only a
+server-side log.

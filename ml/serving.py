@@ -571,26 +571,53 @@ def _grid_for(ctx: ServingContext, origin: str) -> dict | None:
     return props
 
 
-def _origin_weather(ctx: ServingContext, origin: str, d: date, dep_time: str) -> dict[str, float]:
-    """Forecast at the SCHEDULED departure hour — the training time reference.
+def _departure_utc(
+    ctx: ServingContext, origin: str, d: date, dep_time: str, *, hour_only: bool = False
+) -> datetime | None:
+    """The scheduled departure instant in UTC, or None if we cannot place it.
+
     Local wall clock -> UTC via the airport's IANA tz, exactly as the mart's
-    join does with observations."""
+    weather join does with observations. Returns None for an unknown airport or
+    a dim_airport row without a timezone — both take the NULL weather path, and
+    for both we cannot say whether the flight is in the past.
+
+    TWO CALLERS, TWO PRECISIONS, and the difference matters:
+
+      hour_only=True  — the WEATHER bucket. Training joins the last hourly
+                        observation at or before the scheduled departure HOUR,
+                        so the grid lookup keeps using the truncated hour.
+      hour_only=False — the PAST/FUTURE decision. Truncating here is a bug: at
+                        17:05 a flight scheduled 17:30 becomes 17:00, comes back
+                        flight_in_past=true, and a consumer UI told to hard-gate
+                        on that value hides a perfectly valid pre-departure
+                        prediction for up to 59 minutes before every departure.
+    """
     if origin not in ctx.airports.index:
-        return dict(NULL_PATH)  # unknown airport: the training NULL path
-    a = ctx.airports.loc[origin]
-    tz = a["tz"]
+        return None
+    tz = ctx.airports.loc[origin]["tz"]
     if not isinstance(tz, str) or not tz:
-        # a dim_airport row without a timezone cannot place the departure
-        # hour — NULL weather path, never a 500
         log.warning("%s has no timezone in dim_airport; NULL weather path", origin)
-        return dict(NULL_PATH)
-    hour = int(dep_time.split(":")[0])
-    dep_local = datetime(d.year, d.month, d.day, hour, tzinfo=ZoneInfo(tz))
-    dep_utc = dep_local.astimezone(UTC)
-    if dep_utc <= datetime.now(UTC):
+        return None
+    hh, mm = dep_time.split(":")
+    minute = 0 if hour_only else int(mm)
+    return datetime(d.year, d.month, d.day, int(hh), minute, tzinfo=ZoneInfo(tz)).astimezone(UTC)
+
+
+def _origin_weather(ctx: ServingContext, origin: str, d: date, dep_time: str) -> dict[str, float]:
+    """Forecast at the SCHEDULED departure hour — the training time reference."""
+    # hour_only: the grid lookup keeps the training time reference (the
+    # scheduled departure HOUR). The past check below deliberately uses the
+    # full-precision instant instead — see _departure_utc.
+    dep_utc = _departure_utc(ctx, origin, d, dep_time, hour_only=True)
+    exact = _departure_utc(ctx, origin, d, dep_time)
+    if dep_utc is None or exact is None:
+        return dict(NULL_PATH)  # unknown airport / no tz: the training NULL path
+    if exact <= datetime.now(UTC):
         # scoring an already-departed flight is a legitimate debugging use,
         # but the CURRENT grid may postdate departure — the output is not
-        # "pre-departure knowable" and must not be presented as such
+        # "pre-departure knowable" and must not be presented as such. The
+        # response now says so in prediction_basis.flight_in_past, rather than
+        # only in a server log the caller never sees.
         log.warning(
             "%s %s %s already departed: forecast grid may postdate departure; "
             "not a pre-departure prediction",
@@ -599,6 +626,51 @@ def _origin_weather(ctx: ServingContext, origin: str, d: date, dep_time: str) ->
             dep_time,
         )
     return features_at_hour(_grid_for(ctx, origin), dep_utc)
+
+
+def _prediction_basis(ctx: ServingContext, fl: FlightRequest, has_weather: bool) -> dict:
+    """What this prediction actually rests on — surfaced, not buried in a log.
+
+    `weather_horizon` distinguishes the three ways the twelve weather features
+    can be absent, which a caller otherwise cannot tell apart from a bare
+    has_origin_weather=false:
+
+      forecast        an NDFD forecast for the scheduled hour was used
+      beyond_horizon  future flight, but no forecast value — past the ~7-day
+                      NDFD horizon, off-grid, or the fetch failed
+      past            scheduled departure is at or before now, so this is NOT a
+                      pre-departure prediction and a UI must refuse to present
+                      it as one
+      unavailable     the airport is unknown or has no timezone, so the instant
+                      cannot even be placed
+
+    `flight_in_past` is the one a consumer UI must hard-gate on. The API still
+    scores such a request (debugging is a legitimate use) but the caller has to
+    be told, because the number looks exactly like a real forecast.
+    """
+    dep_utc = _departure_utc(ctx, fl.origin, fl.flight_date, fl.dep_time)
+    in_past = dep_utc is not None and dep_utc <= datetime.now(UTC)
+    if dep_utc is None:
+        horizon = "unavailable"
+    elif in_past:
+        horizon = "past"
+    elif has_weather:
+        horizon = "forecast"
+    else:
+        horizon = "beyond_horizon"
+    return {
+        "flight_in_past": in_past,
+        "weather_horizon": horizon,
+        # repeated from the top level so the block is a complete, self-contained
+        # answer to "what does this rest on?" that a UI can render wholesale;
+        # the top-level fields stay for the existing consumers
+        "rotation_context": (
+            "provided" if fl.rotation_position is not None else "typical_estimate"
+        ),
+        "origin_density_source": (
+            "estimated" if _needs_density_estimate(fl.origin_dep_density_hour) else "provided"
+        ),
+    }
 
 
 def assemble_features(ctx: ServingContext, flights: list[FlightRequest]) -> pd.DataFrame:
@@ -757,6 +829,9 @@ def predict(
                 "expected_delay_minutes": round(float(minutes[i]), 1),
                 "logreg_baseline_probability": round(float(p_logreg[i]), 4),
                 "has_origin_weather": has_weather[i],
+                # what this prediction rests on: whether it is pre-departure at
+                # all, and which of the three ways weather can be absent applies
+                "prediction_basis": _prediction_basis(ctx, fl, has_weather[i]),
                 # whether the rotation LINKAGE (position/legs/inbound) was
                 # caller-provided or the typical-median estimate. The API
                 # enforces complete-or-absent, so "provided" means the whole

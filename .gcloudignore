@@ -1,11 +1,16 @@
-# Upload ONLY what the Docker build needs (gcloud run deploy --source).
+# Upload ONLY what the Docker builds need (gcloud builds submit / run deploy).
 # Whitelist style: ignore everything, then re-include the build inputs.
 /*
 !Dockerfile
+!Dockerfile.predictor
 !pyproject.toml
 !uv.lock
 !dashboard/
 !ingestion/
+!ml/
+# ~15 GB of local training runs — never uploaded. The predictor build fetches
+# its one pinned run from GCS into ml_artifacts/ inside the build workspace.
+ml/artifacts/
 **/__pycache__/
 # Never upload local secrets or environments (already excluded by /*; explicit for safety).
 .env
