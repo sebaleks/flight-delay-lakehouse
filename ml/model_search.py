@@ -205,7 +205,18 @@ def apply_hist(df: pd.DataFrame, hist: pd.DataFrame) -> pd.DataFrame:
 # 2. data
 # --------------------------------------------------------------------------
 def load_training_window(bq, project: str, gold: str, limit: int | None = None) -> pd.DataFrame:
-    cols = ", ".join([*f.FEATURES, "flight_date", *f.LABELS])
+    cols = ", ".join(
+        [
+            *f.FEATURES,
+            "flight_date",
+            *f.LABELS,
+            # sort-key extras (bookkeeping, never model inputs) — the same two
+            # ml/data.py pulls, and for the same reason. carrier/origin/dest are
+            # already features; these two are not.
+            "flight_number",
+            "cast(crs_dep_time as string) as crs_dep_time",
+        ]
+    )
     log.info("loading the training window ...")
     df = (
         bq.query(f"select {cols} from `{project}.{gold}.ml_flight_features` where {f.SPLIT_COL}")
@@ -410,18 +421,27 @@ def run(budget_min: int, fit_sample: int, val_sample: int, limit: int | None = N
     log.info("re-deriving hist_* on the fit window (< %s) ...", VAL_START)
     df = apply_hist(df, fit_window_hist(bq, project, gold, VAL_START))
 
-    # Make the draw a function of the DATA, not of arrival order.
+    # CANONICAL ROW ORDER — identical to ml/data.py's, and for the same reason.
     #
     # BigQuery's Storage API streams rows in a non-deterministic order, so the
     # seeded rng.choice below picks the same POSITIONS out of a differently
-    # ordered frame on each run — i.e. a different sample every time, despite
-    # the fixed seed. This is not hypothetical: passes 1 and 2 of this search
-    # re-ran 15 identical configs and every one moved by a uniform -0.0018
-    # PR-AUC, because a single validation draw shifts all models together.
-    # Cross-run numbers were therefore not comparable; within-run ones were.
-    # Sorting by a value-derived hash restores that comparability.
-    order = pd.util.hash_pandas_object(df[list(f.FEATURES)], index=False).to_numpy()
-    df = df.iloc[np.argsort(order, kind="stable")].reset_index(drop=True)
+    # ordered frame on each run — a different sample every time, despite the
+    # fixed seed. Not hypothetical: passes 1 and 2 re-ran 15 identical configs
+    # and every one moved by a uniform -0.0018 PR-AUC, since a single validation
+    # draw shifts all models together. (ml/data.py's note records the same
+    # 0.001-0.002 spread from the same cause.)
+    #
+    # Sort on the mart's TESTED-UNIQUE flight grain, not on a hash of FEATURES:
+    # a feature hash leaves duplicates tied, and a stable sort then preserves
+    # their arrival order — which is the nondeterminism we are removing.
+    # Measured on the training window: 2,054,700 rows (12.3%) sit in
+    # feature-identical groups and 2,052,705 of those carry MIXED labels, so
+    # the ties are neither rare nor interchangeable. The grain below is unique
+    # by a dbt test (_ml__models.yml), so it leaves none.
+    df = df.sort_values(
+        ["flight_date", "carrier", "flight_number", "origin", "dest", "crs_dep_time"],
+        ignore_index=True,
+    )
 
     is_val = df["flight_date"].to_numpy() >= np.datetime64(VAL_START)
     fit_df, val_df = df[~is_val], df[is_val]
