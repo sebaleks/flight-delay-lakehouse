@@ -3,9 +3,11 @@
 -- Ops-capacity page source: the historical shape of each departure bank at an
 -- airport — "ORD normally schedules ~48 departures in the Friday 18:00 hour
 -- and ~11 of them arrive late". THIN view over mart_delays_by_airport_hour
--- (a materialized TABLE): adds airport display labels and the weekday name,
--- no aggregation, never touches fact_flights. Additive counts pass through
--- 1:1; consumers compute rates as SUM/SUM — never averaged rate columns.
+-- (a materialized TABLE, TRAINING WINDOW ONLY — the comparator must predate
+-- the holdout it is judged against; see the mart's header): adds airport
+-- display labels and the weekday name, no aggregation, never touches
+-- fact_flights. Additive counts pass through 1:1; consumers compute rates as
+-- SUM/SUM — never averaged rate columns.
 
 select
     base.origin_airport_key as airport_key,

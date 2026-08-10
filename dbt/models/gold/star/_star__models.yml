@@ -94,7 +94,10 @@ models:
       scheduled departure hour) grain, ADDITIVE counts and sums only — no
       pre-divided rates; consumers compute rates as SUM/SUM so rollups can
       never average averages. Carries both departure (dep_del15) and arrival
-      (arr_del15) outcome counts. The single fact_flights aggregation at this
+      (arr_del15) outcome counts. TRAINING WINDOW ONLY (pre-cutoff, same var
+      as int_historical_delay_rates): the ops page shows these counts as what
+      history alone would predict for a held-out day, so the history must end
+      where the holdout begins. The single fact_flights aggregation at this
       grain; dash_airport_hour_baseline is a thin skin over this table.
     tests:
       - dbt_utils.unique_combination_of_columns:

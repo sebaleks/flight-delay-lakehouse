@@ -11,6 +11,15 @@
 -- support either comparison without a second aggregation. This TABLE is the
 -- single aggregation over fact_flights at this grain; the dashboard view
 -- dash_airport_hour_baseline is a thin label-adding skin over it.
+--
+-- TRAINING WINDOW ONLY (leakage-critical, same rule as
+-- int_historical_delay_rates): the ops page presents these counts as what
+-- "history alone" would have predicted for a HELD-OUT day, so the history
+-- must end where the holdout begins. Unfiltered, the comparator would
+-- contain the very outcomes it is judged against — including the replayed
+-- day itself — and the model-versus-climatology comparison would be
+-- corrupted in history's favor. The cutoff var in dbt_project.yml is the one
+-- and only boundary definition; this WHERE is the only date filter here.
 
 select
     origin_airport_key,
@@ -26,4 +35,5 @@ select
     sum(arr_delay_minutes) as sum_arr_delay_minutes,
     sum(dep_delay_minutes) as sum_dep_delay_minutes
 from {{ ref('fact_flights') }}
+where date_key < date('{{ var("train_test_cutoff_date") }}')
 group by origin_airport_key, day_of_week, crs_dep_hour

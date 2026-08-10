@@ -49,10 +49,13 @@ def _airport_options() -> list[str]:
 
 
 def _history_implied(origin: str, day: date, banks: list[dict]) -> pd.DataFrame:
-    """What history ALONE would predict for this schedule: the bank's 2022-2024
-    same-weekday delay rate (SUM/SUM, never averaged rates) times the number
-    of departures actually scheduled this day. The comparison that shows
-    whether the model adds anything beyond climatology."""
+    """What history ALONE would predict for this schedule: the bank's
+    TRAINING-WINDOW same-weekday delay rate (SUM/SUM, never averaged rates)
+    times the number of departures actually scheduled this day. The mart
+    behind dash_airport_hour_baseline ends at the train/test cutoff, so this
+    comparator never contains the held-out outcomes it is judged against —
+    the comparison that shows whether the model adds anything beyond
+    climatology, kept fair."""
     frame = pd.DataFrame(banks)
     try:
         base = data.airport_hour_baseline()
@@ -153,8 +156,9 @@ def render() -> None:
     st.caption(
         "Band: ±2σ from the calibrated probabilities themselves (√Σp(1−p)), "
         "assuming independence within the hour — shared shocks like a storm "
-        "make the real spread wider. Dotted line: what the 2022–2024 "
-        "same-weekday delay rate alone would have predicted for this schedule."
+        "make the real spread wider. Dotted line: what the pre-cutoff "
+        "(2022 – Jun 2024) same-weekday delay rate alone would have predicted "
+        "for this schedule — history that ends where the holdout begins."
     )
 
     st.markdown("##### Fragile banks — where a slip cascades")
