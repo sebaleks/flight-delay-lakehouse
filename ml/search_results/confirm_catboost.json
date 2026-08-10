@@ -1,0 +1,35 @@
+{
+  "config": {
+    "depth": 8,
+    "learning_rate": 0.05,
+    "l2_leaf_reg": 6,
+    "iterations": 600
+  },
+  "n_fit": 16678880,
+  "n_test": 3561782,
+  "test_roc_auc": 0.7361922247514764,
+  "test_pr_auc": 0.46226726028016685,
+  "test_base_rate": 0.1969011579035438,
+  "test_lift_over_base_rate": 2.347712249140852,
+  "test_brier_raw": 0.19475109383000228,
+  "test_ece_raw": 0.23499643515338606,
+  "test_brier_platt": 0.13534856567840228,
+  "test_ece_platt": 0.014704680082191343,
+  "calibration_val_window": [
+    "2024-05-06",
+    "2024-06-30"
+  ],
+  "shipped": {
+    "roc_auc": 0.7389,
+    "pr_auc": 0.4652,
+    "base_rate": 0.1969,
+    "ece_platt": 0.017,
+    "rmse": 49.26,
+    "mae": 18.99
+  },
+  "minutes_so_far": 30.0,
+  "delta_roc_auc": -0.002707775248523614,
+  "delta_pr_auc": -0.002932739719833155,
+  "shipped_lift": 2.36262061960386,
+  "beats_shipped": false
+}

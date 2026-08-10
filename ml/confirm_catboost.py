@@ -67,9 +67,22 @@ log = logging.getLogger("ml.confirm_catboost")
 OUT = Path(__file__).parent / "search_results"
 SEED = 0
 
-# The pass-2 validation winner, fixed in advance. val PR-AUC 0.51460 / ROC
-# 0.72684, against the shipped config's 0.49805 / 0.71269 on identical rows.
-WINNER = {"depth": 10, "learning_rate": 0.05, "l2_leaf_reg": 6, "iterations": 1200}
+# The CatBoost representative, fixed in advance of seeing any test number.
+#
+# Pass 2's top four CatBoost configs scored 0.51460 / 0.51433 / 0.51285 /
+# 0.51225 on validation — a spread of 0.00235 against a measured draw-level
+# noise floor of 0.0018 (ml/search_results/pass1 vs the pass-2 replicate). They
+# are statistically indistinguishable, so "the winner" is not a meaningful
+# distinction among them and picking on COST is legitimate. This one is
+# depth 8 / 600 iterations: ~4x cheaper than depth 10 / 1200 (a ~50 min fit
+# instead of ~3.3 h) and still 0.0148 clear of the shipped XGBoost config's
+# 0.49805 on the same rows.
+#
+# The choice was made BEFORE any held-out number existed — the earlier
+# depth-10 attempt died at iteration 237 of 1200 without writing a result — so
+# no test observation informed it. That ordering is what rule 7 protects; had a
+# test score been seen first, switching configs would be re-selection.
+WINNER = {"depth": 8, "learning_rate": 0.05, "l2_leaf_reg": 6, "iterations": 600}
 
 # NOT selected on anything — see the module docstring. Deliberately cheaper than
 # WINNER so the regression head cannot eat the whole budget before the

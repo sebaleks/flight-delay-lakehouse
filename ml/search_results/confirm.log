@@ -1,0 +1,10 @@
+warning: `VIRTUAL_ENV=/opt/anaconda3/envs/msds694` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
+2026-08-10 15:40:36,236 WARNING google.auth._default: No project ID could be determined. Consider running `gcloud config set project` or setting the GOOGLE_CLOUD_PROJECT environment variable
+2026-08-10 15:40:36,236 INFO ml.data: loading flight_delays_gold.ml_flight_features (57 columns) ...
+2026-08-10 15:45:59,602 INFO ml.data: loaded 20,240,662 rows
+2026-08-10 15:46:25,304 INFO ml.data: canonical sort applied (unique flight grain)
+2026-08-10 15:46:27,796 INFO ml.confirm_catboost: fit 16,678,880 rows | held-out test 3,561,782 rows
+2026-08-10 15:46:36,427 INFO ml.confirm_catboost: scale_pos_weight 3.7489 | training CatBoost classifier {'depth': 8, 'learning_rate': 0.05, 'l2_leaf_reg': 6, 'iterations': 600} ...
+2026-08-10 16:10:26,251 INFO ml.confirm_catboost: classifier fit in 29.8 min — scoring the held-out test ONCE
+2026-08-10 16:10:36,155 INFO ml.confirm_catboost: CLASSIFIER: ROC 0.7362 (-0.0027) | PR-AUC 0.4623 (-0.0029) | lift 2.35x | ECE(platt) 0.0147
+2026-08-10 16:10:36,160 INFO ml.confirm_catboost: training CatBoost regressor (UNTUNED, {'depth': 8, 'learning_rate': 0.05, 'l2_leaf_reg': 6, 'iterations': 600}) ...
