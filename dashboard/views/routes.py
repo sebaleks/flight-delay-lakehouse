@@ -121,12 +121,19 @@ def render() -> None:
 
 
 def _render_airline_breakdown(df) -> None:
-    """Who flies these routes, and how reliably — the first question anyone
-    asks of a route that the route grain alone cannot answer.
+    """Who flies these routes, how much of them, and how reliably.
 
-    Rendered as a borderless list rather than a grid: it is a handful of rows
-    (17 airlines at most, usually 2-6 on one route) and a spreadsheet with
-    blank filler underneath reads as missing data.
+    Three columns, because a bare delay rate is not a fair comparison:
+
+      SHARE   how much of the selected traffic is theirs — a 30% rate on 4% of
+              the flights is a footnote; on 45% of them it IS the route.
+      RATE    the raw SUM/SUM delay rate.
+      VS MIX  actual delays against what the ROUTES THEY FLY would predict
+              (indirect standardisation, dashboard/metrics.mix_adjusted).
+              Comparing raw rates across many routes compares route mixes too:
+              an airline concentrated on congested hubs looks worse than one
+              flying Hawaii whatever its operations are like. 1.00x means
+              "exactly as its own routes predict".
     """
     routes = set(df["route"])
     rc = data.route_carrier()
@@ -135,32 +142,46 @@ def _render_airline_breakdown(df) -> None:
         st.info("No airline breakdown for the current filters.")
         return
 
-    by_carrier = metrics.aggregate(rc, ["carrier_key"]).sort_values("n_flights", ascending=False)
+    adj = metrics.mix_adjusted(rc, "carrier_key", "route").sort_values("n_flights", ascending=False)
+    adj["share"] = metrics.share_of(adj)
+
+    single = len(routes) == 1
     st.caption(
-        f"{len(by_carrier)} airlines across the {len(routes):,} route(s) selected. "
-        "Rates are SUM/SUM across the selected routes, never an average of route rates."
+        f"{len(adj)} airlines across the {len(routes):,} route(s) selected · "
+        f"{int(adj['n_flights'].sum()):,} flights. Rates are SUM/SUM, never an "
+        "average of per-route rates."
     )
     ui.floating_rows(
         [
             {
                 "carrier": r["carrier_key"],
+                "share": ui.pct(r["share"], 0),
                 "legs": ui.count(r["n_flights"]),
-                "delay": ui.pct(r["delay_rate"]),
-                "cancel": ui.pct(r["cancellation_rate"]),
-                "avg": ui.minutes(r["avg_arr_delay_minutes"]),
+                "rate": ui.pct(r["rate"]),
+                "vs": "—" if single or pd.isna(r["index"]) else f"{r['index']:.2f}x",
             }
-            for _, r in by_carrier.iterrows()
+            for _, r in adj.iterrows()
         ],
         [
             ("carrier", "Airline", "key"),
+            ("share", "Share of flights", "num"),
             ("legs", "Legs", "num"),
-            ("delay", "Delay rate", "num"),
-            ("cancel", "Cancel rate", "num"),
-            ("avg", "Avg delay", "num"),
+            ("rate", "Delay rate", "num"),
+            ("vs", "vs its route mix", "num"),
         ],
     )
-    if len(routes) == 1:
+    if single:
         st.caption(
-            "One route selected, so this is the per-airline split of that route — "
-            "the number the route-level rate hides."
+            "One route selected, so every airline flies the same route and the "
+            "mix adjustment has nothing to correct for — the delay rates are "
+            "already like-for-like."
         )
+    else:
+        worst = adj.loc[adj["index"].idxmax()] if adj["index"].notna().any() else None
+        if worst is not None:
+            st.caption(
+                f"**vs its route mix**: 1.00x = exactly as the routes that airline flies "
+                f"would predict; above 1 is worse than its routes explain. "
+                f"Highest here is **{worst['carrier_key']}** at {worst['index']:.2f}x. "
+                "Read it alongside share and legs — a small carrier's number moves easily."
+            )

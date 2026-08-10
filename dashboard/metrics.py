@@ -67,3 +67,56 @@ def totals(df: pd.DataFrame) -> dict[str, float]:
         denom = sums[den]
         result[label] = float(sums[num] / denom) if denom else float("nan")
     return result
+
+
+def share_of(df: pd.DataFrame, col: str = "n_flights") -> pd.Series:
+    """Each row's share of the column total. NaN-safe, sums to 1."""
+    total = df[col].sum()
+    return df[col] / total if total else df[col] * float("nan")
+
+
+def mix_adjusted(
+    df: pd.DataFrame,
+    entity_col: str,
+    stratum_col: str,
+    *,
+    num: str = "n_arr_del15",
+    den: str = "n_with_arr_outcome",
+) -> pd.DataFrame:
+    """Each entity's rate against what its OWN mix of strata would predict.
+
+    WHY A RAW RATE IS NOT A FAIR COMPARISON. Comparing airlines' overall delay
+    rates across a set of routes silently compares their route mixes too: an
+    airline concentrated on congested winter hubs looks worse than one flying
+    Hawaii, whatever its operations are like. The question people actually mean
+    is "is this airline worse than the routes it flies would predict?".
+
+    So for each entity we compute the delays it WOULD have had performing at
+    each stratum's own average, weighted by how much it flies there:
+
+        expected = sum over strata of  n_entity_stratum * rate_stratum
+        index    = actual / expected        (1.0 = exactly as its routes predict)
+
+    This is indirect standardisation. It is only meaningful WITHIN the selected
+    set — the strata rates are computed from the same filtered frame, so the
+    index answers "relative to the other airlines here", not an absolute claim.
+
+    Returns one row per entity with n, actual/expected counts, the raw rate, the
+    expected rate, and the index.
+    """
+    strata = df.groupby(stratum_col, observed=True)[[num, den]].sum()
+    strata_rate = (strata[num] / strata[den].where(strata[den] != 0)).rename("stratum_rate")
+    joined = df.join(strata_rate, on=stratum_col)
+    joined["expected"] = joined[den] * joined["stratum_rate"]
+
+    out = joined.groupby(entity_col, observed=True).agg(
+        n_flights=("n_flights", "sum"),
+        actual=(num, "sum"),
+        denominator=(den, "sum"),
+        expected=("expected", "sum"),
+    )
+    out["rate"] = out["actual"] / out["denominator"].where(out["denominator"] != 0)
+    out["expected_rate"] = out["expected"] / out["denominator"].where(out["denominator"] != 0)
+    # index > 1 means worse than the mix of routes it flies would predict
+    out["index"] = out["actual"] / out["expected"].where(out["expected"] != 0)
+    return out.reset_index()
