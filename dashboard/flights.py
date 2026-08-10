@@ -226,3 +226,17 @@ def connection_risk(
         f"connection; the nearest measured threshold is {t} minutes"
         + (", so this slightly overstates the risk" if t < slack else ""),
     )
+
+
+def earliest_connection(arr_time: str, mct_min: int = DEFAULT_MCT_MIN) -> str:
+    """The first departure time that could realistically be connected to.
+
+    arr_time + the minutes needed to change planes, as "HH:MM". Clamped at
+    23:59 rather than wrapping into the next day: the picker shows ONE day's
+    board, so a wrapped time would silently re-admit early-morning departures
+    that are actually the day before the inbound lands.
+    """
+    total = _minutes(arr_time) + mct_min
+    if total >= 24 * 60:
+        return "23:59"
+    return f"{total // 60:02d}:{total % 60:02d}"

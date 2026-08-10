@@ -93,8 +93,21 @@ def _band_of(p: float, bins: list[dict]) -> dict | None:
     return None
 
 
-def _pick_flight(url: str, key: str, title: str, origin_default: str, day: date) -> dict | None:
-    """Airport -> board -> filters -> one selected flight. None until chosen."""
+def _pick_flight(
+    url: str,
+    key: str,
+    title: str,
+    origin_default: str,
+    day: date,
+    earliest_dep: str | None = None,
+) -> dict | None:
+    """Airport -> board -> filters -> one selected flight. None until chosen.
+
+    earliest_dep (leg 2 only) drops departures that leave before the first leg
+    lands plus the time to change planes. A flight that departs before your
+    inbound arrives is not a connection you could make, so listing it is worse
+    than useless — it invites picking an itinerary that cannot happen.
+    """
     names = _airport_names()
     codes = sorted(names)
     st.markdown(f"##### {title}")
@@ -130,10 +143,30 @@ def _pick_flight(url: str, key: str, title: str, origin_default: str, day: date)
         key=f"{key}_dest",
     )
     number = c3.text_input("Flight no.", key=f"{key}_no", placeholder="e.g. 2842")
+    # leg 2 cannot depart before leg 1 lands and you walk to the gate
+    floor = "00:00"
+    if earliest_dep:
+        rows = [r for r in rows if r["dep_time"] >= earliest_dep]
+        floor = f"{int(earliest_dep.split(':')[0]):02d}:00"
+        if not rows:
+            st.warning(
+                f"No departures from {names.get(origin, origin)} after "
+                f"{earliest_dep} — nothing here connects from your first flight "
+                "on the same day."
+            )
+            return None
+        st.caption(
+            f"Showing departures from **{earliest_dep}** onwards — when your "
+            f"first flight lands, plus {fl.DEFAULT_MCT_MIN} minutes to change planes."
+        )
+        carriers = sorted({f["carrier"] for f in rows})
+        dests = sorted({f["dest"] for f in rows})
+
+    options = [f"{h:02d}:00" for h in range(25)]
     early, late = st.select_slider(
         "Departure window",
-        options=[f"{h:02d}:00" for h in range(25)],
-        value=("00:00", "24:00"),
+        options=options,
+        value=(floor if floor in options else "00:00", "24:00"),
         key=f"{key}_win",
     )
 
@@ -371,7 +404,11 @@ def render() -> None:
     leg2 = None
     if connecting and leg1:
         st.divider()
-        leg2 = _pick_flight(url, "l2", "Connecting flight", leg1["dest"], day)
+        # the connecting board starts where the first leg lands, plus the walk
+        earliest = fl.earliest_connection(leg1["arr_time"], fl.DEFAULT_MCT_MIN)
+        leg2 = _pick_flight(
+            url, "l2", "Connecting flight", leg1["dest"], day, earliest_dep=earliest
+        )
         if leg2 and leg2["origin"] != leg1["dest"]:
             st.warning(
                 f"Your first flight lands at {leg1['dest']} but the connection departs "

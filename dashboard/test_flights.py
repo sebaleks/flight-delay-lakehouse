@@ -203,3 +203,20 @@ def test_carrier_code_round_trips_including_the_regional_suffix():
 
     for code, name, reg in [("UA", "United Airlines", False), ("MQ", "Envoy Air", True)]:
         assert code_from_label(carrier_label(code, name, reg)) == code
+
+
+def test_earliest_connection_adds_the_walk_time():
+    from dashboard.flights import DEFAULT_MCT_MIN, earliest_connection
+
+    assert earliest_connection("14:00") == f"14:{DEFAULT_MCT_MIN:02d}"
+    assert earliest_connection("14:45", 30) == "15:15"
+    assert earliest_connection("09:05", 45) == "09:50"
+
+
+def test_earliest_connection_clamps_instead_of_wrapping():
+    """A wrap to 00:15 would silently re-admit early-morning departures that
+    are the day BEFORE the inbound lands — the picker shows one day's board."""
+    from dashboard.flights import earliest_connection
+
+    assert earliest_connection("23:50", 30) == "23:59"
+    assert earliest_connection("23:59", 60) == "23:59"
