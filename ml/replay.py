@@ -42,6 +42,19 @@ log = logging.getLogger("ml.replay")
 MART_TABLE = "ml_flight_features"
 DEFAULT_SAMPLE = 100_000
 IDENTITY = ["flight_date", "carrier", "flight_number", "origin", "dest"]
+# the earliest date the held-out window can contain — the belt behind the
+# `not is_training_row` filter. Used by main()'s assert and by the API's
+# airport-day guard when the artifacts run predates metrics.json.
+HOLDOUT_FLOOR = pd.Timestamp("2024-07-01")
+# schedule-linkage columns the ops page needs ALONGSIDE the score: hour for
+# bank aggregation, rotation position/legs for downstream exposure (all
+# schedule-derived; NULL on swap-shaped linkages per the tail-swap
+# restriction), the tight-turnaround flag for fragile-bank screening.
+AIRPORT_DAY_EXTRA_COLS = ("crs_dep_hour", "rotation_position", "legs_today", "is_tight_turnaround")
+
+
+class NoHeldOutRows(LookupError):
+    """No held-out mart rows matched the requested filters."""
 
 
 def load_holdout(
@@ -136,6 +149,88 @@ def score(ctx: ServingContext, df: pd.DataFrame) -> pd.DataFrame:
     out["expected_delay_minutes"] = ctx.models.reg.predict(x)
     out["has_origin_weather"] = x["has_origin_weather"].to_numpy() == 1.0
     return out
+
+
+def score_airport_day(ctx: ServingContext, origin: str, day: str) -> pd.DataFrame:
+    """Score ONE airport's held-out day, keeping the ops page's schedule columns.
+
+    The whole day, no sampling — an airport-day is a few hundred to ~1,000
+    rows, and a capacity view of a bank with flights missing would be wrong,
+    not just imprecise. Features come straight from the mart (no forecast
+    call, no feature assembly); labels ride along so prediction can be shown
+    next to what happened.
+    """
+    try:
+        df = load_holdout(ctx, sample=None, origin=origin, flight_date=day)
+    except SystemExit as exc:  # load_holdout's CLI-shaped empty signal
+        raise NoHeldOutRows(str(exc)) from None
+    scored = score(ctx, df)
+    for c in AIRPORT_DAY_EXTRA_COLS:
+        # score() copies out of df with the index preserved, so this aligns
+        scored[c] = df[c]
+    return scored
+
+
+def _opt(v, cast=float):
+    """NaN-safe JSON value: the mart's NULLs (e.g. swap-shaped rotation
+    linkage) must serialize as null, never as the string 'nan'."""
+    return None if pd.isna(v) else cast(v)
+
+
+def airport_day_payload(origin: str, day: str, scored: pd.DataFrame, artifacts: str) -> dict:
+    """The /replay/airport-day response body. Pure — a frame in, JSON out.
+
+    summary carries the headline the ops page opens with: expected delayed
+    departures Σp with the Poisson-binomial standard deviation √Σp(1−p)
+    (exact for a sum of independent Bernoullis — the model's own claim about
+    the day), next to the actual count. Per-flight rows keep labels and the
+    schedule-linkage columns so the page can aggregate by bank without a
+    second query.
+    """
+    p = scored["delay_probability"].to_numpy(dtype=float)
+    ordered = scored.sort_values(["dep_time", "carrier", "flight_number", "dest"])
+    flights = [
+        {
+            "carrier": str(r["carrier"]),
+            "flight_number": str(r["flight_number"]),
+            "dest": str(r["dest"]),
+            "dep_time": str(r["dep_time"]),
+            "dep_hour": int(r["crs_dep_hour"]),
+            "delay_probability": round(float(r["delay_probability"]), 4),
+            "expected_delay_minutes": round(float(r["expected_delay_minutes"]), 1),
+            "actual_delayed": bool(r["label_arr_del15"]),
+            "actual_delay_minutes": _opt(r["label_arr_delay_minutes"]),
+            "has_origin_weather": bool(r["has_origin_weather"]),
+            "rotation_position": _opt(r["rotation_position"], int),
+            "legs_today": _opt(r["legs_today"], int),
+            "is_tight_turnaround": _opt(r["is_tight_turnaround"], lambda v: bool(int(v))),
+        }
+        for _, r in ordered.iterrows()
+    ]
+    return {
+        "origin": origin,
+        "date": day,
+        "artifacts": artifacts,
+        "n_flights": len(scored),
+        # the honesty block, same spirit as /predict's prediction_basis: these
+        # rows carry OBSERVED weather at scheduled departure (the test-set
+        # regime); live serving substitutes forecasts and will be somewhat
+        # worse — see the module docstring
+        "prediction_basis": {
+            "mode": "held_out_replay",
+            "weather": "observed_at_scheduled_departure",
+            "note": (
+                "test-set regime: replay uses observed weather; "
+                "live serving substitutes forecasts (ml/replay.py)"
+            ),
+        },
+        "summary": {
+            "expected_delayed": round(float(p.sum()), 2),
+            "expected_delayed_sd": round(float((p * (1 - p)).sum() ** 0.5), 2),
+            "actual_delayed": int(scored["label_arr_del15"].astype(bool).sum()),
+        },
+        "flights": flights,
+    }
 
 
 def report(scored: pd.DataFrame, limit: int) -> None:
@@ -238,7 +333,7 @@ def main() -> None:
     # the filter is on the mart's own split column, but a demo that silently
     # scored a training row would be the exact failure this whole project is
     # about — so prove it, don't assume it
-    assert scored["flight_date"].min() >= pd.Timestamp("2024-07-01"), "training row in replay!"
+    assert scored["flight_date"].min() >= HOLDOUT_FLOOR, "training row in replay!"
     report(scored, args.limit)
 
 
