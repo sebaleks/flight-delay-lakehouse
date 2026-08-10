@@ -49,8 +49,15 @@ def _map() -> None:
     map_view.render()
 
 
+def _predict_flight() -> None:
+    from dashboard.views import predict_flight
+
+    predict_flight.render()
+
+
 PAGES = [
     st.Page(_overview, title="Overview", icon="🏠", default=True),
+    st.Page(_predict_flight, title="Will my flight be late?", icon="🔮"),
     st.Page(_map, title="Delay map", icon="🗺️"),
     st.Page(_reliability, title="Who is reliable?", icon="🏆"),
     st.Page(_timing, title="When do delays happen?", icon="🕒"),
