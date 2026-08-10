@@ -66,3 +66,6 @@ mlartifacts/
 *.swp
 
 # uv.lock IS committed — do not ignore it.
+
+# CatBoost writes per-fit training logs here; scratch, not source.
+catboost_info/
