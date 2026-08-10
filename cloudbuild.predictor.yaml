@@ -23,9 +23,17 @@ substitutions:
 
 options:
   logging: CLOUD_LOGGING_ONLY
-  machineType: E2_HIGHCPU_8   # ~695 MB of artifacts + a 1 GB+ image layer
-  # belongs HERE, under options — at the build root Cloud Build rejects the
-  # whole config as an unknown top-level field and the deploy never starts
+  # NO machineType OVERRIDE, deliberately. E2_HIGHCPU_8 built this image in
+  # 6m06s once and then failed TWICE in a row with a bare INTERNAL_ERROR — no
+  # statusDetail, no failureInfo, no logs, and a config byte-identical to the
+  # run that had succeeded, i.e. a capacity failure in the pool rather than
+  # anything in this file. The default pool builds it in 8m30s. Two and a half
+  # minutes is not worth a deploy that intermittently cannot run at all.
+  # If you re-add it, expect to need a fallback.
+  #
+  # substitutionOption belongs HERE, under options — at the build root Cloud
+  # Build rejects the whole config as an unknown top-level field and the
+  # deploy never starts.
   substitutionOption: ALLOW_LOOSE
 
 timeout: 2400s

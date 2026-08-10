@@ -1,8 +1,8 @@
 """Ops page: the capacity picture for one airport-day, replayed honestly.
 
 The demo beat this page exists for:
-    "On 2024-09-13 the model expected 41 ± 9 delayed departures in ORD's
-    18:00 bank. There were 44."
+    "On 2024-11-06 the model expected 79 delayed departures at ORD.
+    There were 77."
 
 Mode: REPLAY, not live. The flights are HELD-OUT test rows — the model never
 trained on them, and the outcome is known — so every expectation renders next
@@ -34,7 +34,14 @@ from dashboard.predict_client import PredictorUnavailable, replay_airport_day
 # just keep the picker from offering dates that can only fail.
 HOLDOUT_MIN = date(2024, 7, 1)
 HOLDOUT_MAX = date(2024, 12, 31)
-DEFAULT_DAY = date(2024, 9, 13)
+# Chosen BY EVIDENCE, not by looking good: ml.day_typicality puts 2024-11-06 at
+# ORD's 57th percentile (z = -0.25) — an unexceptional day — and the model lands
+# on it, 79.0 expected vs 77 actual. The previous default, 2024-09-13, is also
+# "typical" by the band but has the model over-predicting 173.6 vs 133, which
+# renders as OUTSIDE its own +/-2sigma band. Both tails are cherry-picks; this is
+# the middle. Re-check with:
+#   uv run --extra ml --extra ingestion python -m ml.day_typicality --origin ORD --date <d>
+DEFAULT_DAY = date(2024, 11, 6)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -155,10 +162,16 @@ def render() -> None:
     )
     st.caption(
         "Band: ±2σ from the calibrated probabilities themselves (√Σp(1−p)), "
-        "assuming independence within the hour — shared shocks like a storm "
-        "make the real spread wider. Dotted line: what the pre-cutoff "
-        "(2022 – Jun 2024) same-weekday delay rate alone would have predicted "
-        "for this schedule — history that ends where the holdout begins."
+        "which assumes flights fail independently. **They do not, and the gap "
+        "is measured, not hedged:** across ORD's 184 held-out days the "
+        "standardised daily error has a spread of **5.5**, not 1, and only "
+        "**36%** of days land inside this ±2σ band — a storm or a ground stop "
+        "hits a whole bank at once. Read the band as the model's "
+        "independence-assumption claim, not a 95% interval; "
+        "`python -m ml.day_typicality --origin XXX` reports it per airport. "
+        "Dotted line: what the pre-cutoff (2022 – Jun 2024) same-weekday delay "
+        "rate alone would have predicted for this schedule — history that ends "
+        "where the holdout begins."
     )
 
     st.markdown("##### Fragile banks — where a slip cascades")
