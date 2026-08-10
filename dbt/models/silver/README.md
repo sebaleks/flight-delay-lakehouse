@@ -1,6 +1,13 @@
-# silver/ (BigQuery, materialized as views by default)
+# silver/ (BigQuery, materialized as **tables**)
 
-Cleaned, typed, conformed models built from bronze sources. Responsibilities:
+Cleaned, typed, conformed models built from bronze sources.
+
+> **Materialization is a cost decision, not a default.** `dbt_project.yml` sets
+> `+materialized: table` for this whole folder: a silver *view* would re-scan
+> the bronze GCS CSVs (33.8 GiB) on every downstream query. Verified 8 silver
+> objects `BASE TABLE`, 0 views. See [`docs/compute_choice.md`](../../../docs/compute_choice.md).
+
+Responsibilities:
 
 - Cast/parse raw strings into proper types (incl. ISD packed hourly fields —
   `silver_isd_hourly` decodes TMP/WND/VIS/precip/present-weather in SQL).

@@ -589,7 +589,17 @@ def assemble_features(ctx: ServingContext, flights: list[FlightRequest]) -> pd.D
     unpopulated = [c for c in f.FEATURES if c not in rows[0]]
     if unpopulated:
         raise SchemaMismatchError(f"assembly did not populate features: {unpopulated}")
-    x = pd.DataFrame(rows, columns=list(f.FEATURES))
+    return coerce_feature_frame(ctx, pd.DataFrame(rows, columns=list(f.FEATURES)))
+
+
+def coerce_feature_frame(ctx: ServingContext, x: pd.DataFrame) -> pd.DataFrame:
+    """Coerce an assembled feature frame to the trained dtypes and gate it.
+
+    Split out of assemble_features so that any path scoring the shipped models
+    — request assembly here, mart-row replay in ml/replay.py — goes through
+    the SAME categorical vocabulary and the SAME schema gates. Behaviour is
+    unchanged; this is the extraction, not a new policy.
+    """
     for c in f.CATEGORICAL_FEATURES:
         # categorical dtype built on the TRAINING vocabulary: xgboost >= 3
         # recodes by name and raises on categories absent from the trained

@@ -10,7 +10,16 @@ repo as reviewable, runnable code, fits the project's `uv`/Python stack, and can
 be committed and version-controlled. The Looker Studio spec remains a valid
 click-to-build alternative for a fully-managed BI surface.
 
-## Run it
+## Live
+
+**https://flight-delay-dashboard-buboj66t4q-uc.a.run.app** — deployed to Cloud
+Run (`us-central1`), public, no login. Cloud Build rebuilds and redeploys on
+every push to `main` (`Dockerfile`, `cloudbuild.yaml` at the repo root); the
+service authenticates to BigQuery with its runtime service account via ADC — no
+key file (CLAUDE.md §2). It scales to zero between visits, so idle cost is nil
+and a cold start costs a few seconds.
+
+## Run it locally
 
 ```bash
 # 1. Auth (once) + config
