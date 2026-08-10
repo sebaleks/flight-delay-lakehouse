@@ -54,8 +54,14 @@ jobs:
       # orchestration extras + dev group are installed to keep CI fast (the
       # heavy ml extra is NOT needed: assets import ml/ingestion lazily inside
       # their bodies, so Definitions load stays light and credential-free)
-      - name: install transform + orchestration extras + dev group
-        run: uv sync --extra transform --extra orchestration --group dev
+      # the dashboard extra is here for test_pages_render.py, which renders every
+      # Streamlit page and is the only guard against a page referencing a column
+      # its dataframe does not have. Without streamlit installed its
+      # importorskip would skip the whole suite and the guard would be
+      # decorative — which is exactly how a KeyError on the route page reached
+      # production once already.
+      - name: install transform + orchestration + dashboard extras + dev group
+        run: uv sync --extra transform --extra orchestration --extra dashboard --group dev
 
       - name: dbt parse
         run: |
@@ -72,3 +78,11 @@ jobs:
         run: |
           uv run ruff check ingestion ml orchestration dashboard
           uv run ruff format --check ingestion ml orchestration dashboard
+
+      # dashboard only: ml/ tests need the heavy ml extra (xgboost, sklearn,
+      # ~700 MB of wheels) which this workflow deliberately does not install.
+      # Credential-free — the two BigQuery-backed checks in test_verify.py skip
+      # themselves when ADC is absent, verified by running this suite with an
+      # empty CLOUDSDK_CONFIG: 62 passed, 2 skipped.
+      - name: pytest (dashboard)
+        run: uv run pytest dashboard -q

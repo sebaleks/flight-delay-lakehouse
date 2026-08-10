@@ -10,9 +10,14 @@ route-grain frame reached production.
 
 No credentials and no network: ``dashboard.data``'s loaders are replaced with
 frames built from ``dashboard.schemas.SCHEMAS``, which carries the real
-BigQuery column lists. So this runs in CI on every push, and
-``test_verify.test_schemas_match_bigquery`` stops the fixtures drifting away
-from the warehouse behind its back.
+BigQuery column lists. ``test_verify.test_schemas_match_bigquery`` stops the
+fixtures drifting away from the warehouse behind its back.
+
+This only guards anything because ``.github/workflows/pr-checks.yml`` installs
+the ``dashboard`` extra and runs ``pytest dashboard``. That workflow ran no
+pytest at all until this file was added, so the ``importorskip`` below would
+have skipped the entire suite and the guard would have been decorative — keep
+both the extra and the pytest step when editing CI.
 
 What it does and does not prove: it proves each page renders on the DEFAULT
 filter state with plausible data. It does not prove every interactive branch
