@@ -230,7 +230,24 @@ def load_training_window(bq, project: str, gold: str, limit: int | None = None) 
 # 3. the five families
 # --------------------------------------------------------------------------
 def families() -> dict[str, list[dict]]:
-    """Five learners NOT yet tried, with a small curated grid each.
+    """Five learners NOT yet tried, plus the two INCUMBENTS as reference.
+
+    The reference families are the point of the second pass. The first run
+    ranked the five newcomers against each other and crowned CatBoost — but a
+    number with nothing to beat cannot answer the only question that matters,
+    "should we swap the shipped model?". These runs are NOT comparable to the
+    val PR-AUC quoted in ml/README.md: that one was measured on the full fit
+    set with hist_* taken from the mart (leaky on a validation slice, rule 10).
+    Here every family sees the same subsample, the same 800k validation rows
+    and the same fit-window-derived hist_*, so the columns can be subtracted.
+
+      xgb_incumbent the SHIPPED classifier config (train.CLASSIFIER_PARAMS,
+                    300 rounds) plus three neighbours, so this is a family
+                    contest and not one tuned challenger against one frozen
+                    defender.
+      lightgbm      the other mainstream GBDT with native categorical support;
+                    without it "CatBoost wins" might just mean "leaf-wise
+                    boosting with target statistics wins".
 
     Chosen for a reason, not variety for its own sake:
       catboost      ordered target statistics are built for high-cardinality
@@ -246,9 +263,32 @@ def families() -> dict[str, list[dict]]:
                     others run, weights chosen on validation).
     """
     return {
+        # The incumbents run FIRST: if the budget runs out, the one comparison
+        # the whole exercise exists to make is already on the table.
+        "xgb_incumbent": [
+            {"n_estimators": n, "learning_rate": lr, "max_depth": d}
+            # (300, 0.1, 8) IS the shipped config — train.CLASSIFIER_PARAMS
+            # with the default xgb_rounds. Keep it first and keep it exact.
+            for n, lr, d in [(300, 0.1, 8), (600, 0.05, 8), (600, 0.1, 10), (300, 0.1, 6)]
+        ],
+        "lightgbm": [
+            {"n_estimators": n, "learning_rate": lr, "num_leaves": nl, "min_child_samples": mcs}
+            for n, lr, nl, mcs in [(600, 0.05, 255, 20), (400, 0.1, 127, 20), (600, 0.05, 511, 50)]
+        ],
         "catboost": [
-            {"depth": d, "learning_rate": lr, "l2_leaf_reg": l2, "iterations": 600}
-            for d, lr, l2 in [(6, 0.1, 3), (8, 0.1, 3), (8, 0.05, 6), (10, 0.05, 6), (6, 0.05, 1)]
+            {"depth": d, "learning_rate": lr, "l2_leaf_reg": l2, "iterations": it}
+            for d, lr, l2, it in [
+                (6, 0.1, 3, 600),
+                (8, 0.1, 3, 600),
+                (8, 0.05, 6, 600),
+                (10, 0.05, 6, 600),
+                (6, 0.05, 1, 600),
+                # Pass 1's top two, given more trees: both led at 600 iterations
+                # with no sign of having turned over, so the grid may simply have
+                # stopped early rather than found the optimum.
+                (8, 0.1, 3, 1200),
+                (10, 0.05, 6, 1200),
+            ]
         ],
         "hist_gbdt": [
             {"max_depth": d, "learning_rate": lr, "max_iter": 400, "min_samples_leaf": msl}
@@ -268,6 +308,8 @@ def families() -> dict[str, list[dict]]:
 def _prep(X: pd.DataFrame, kind: str) -> pd.DataFrame:
     """Categoricals the way each library wants them."""
     X = X.copy()
+    if kind in ("xgb_incumbent", "lightgbm"):
+        return X  # both consume the pandas `category` dtype natively
     if kind == "catboost":
         for c in f.CATEGORICAL_FEATURES:
             X[c] = X[c].astype(str).fillna("__NA__")
@@ -282,6 +324,30 @@ def _prep(X: pd.DataFrame, kind: str) -> pd.DataFrame:
 
 
 def build(kind: str, params: dict, spw: float):
+    if kind == "xgb_incumbent":
+        import xgboost as xgb
+
+        # Every non-grid argument copied from train.py's classifier so the
+        # first config reproduces the shipped model rather than resembling it.
+        return xgb.XGBClassifier(
+            **params,
+            tree_method="hist",
+            enable_categorical=True,
+            scale_pos_weight=spw,
+            n_jobs=-1,
+            eval_metric="aucpr",
+            random_state=SEED,
+        )
+    if kind == "lightgbm":
+        from lightgbm import LGBMClassifier
+
+        return LGBMClassifier(
+            **params,
+            random_state=SEED,
+            n_jobs=-1,
+            verbose=-1,
+            scale_pos_weight=spw,
+        )
     if kind == "catboost":
         from catboost import CatBoostClassifier
 
@@ -343,6 +409,19 @@ def run(budget_min: int, fit_sample: int, val_sample: int, limit: int | None = N
     df = load_training_window(bq, project, gold, limit)
     log.info("re-deriving hist_* on the fit window (< %s) ...", VAL_START)
     df = apply_hist(df, fit_window_hist(bq, project, gold, VAL_START))
+
+    # Make the draw a function of the DATA, not of arrival order.
+    #
+    # BigQuery's Storage API streams rows in a non-deterministic order, so the
+    # seeded rng.choice below picks the same POSITIONS out of a differently
+    # ordered frame on each run — i.e. a different sample every time, despite
+    # the fixed seed. This is not hypothetical: passes 1 and 2 of this search
+    # re-ran 15 identical configs and every one moved by a uniform -0.0018
+    # PR-AUC, because a single validation draw shifts all models together.
+    # Cross-run numbers were therefore not comparable; within-run ones were.
+    # Sorting by a value-derived hash restores that comparability.
+    order = pd.util.hash_pandas_object(df[list(f.FEATURES)], index=False).to_numpy()
+    df = df.iloc[np.argsort(order, kind="stable")].reset_index(drop=True)
 
     is_val = df["flight_date"].to_numpy() >= np.datetime64(VAL_START)
     fit_df, val_df = df[~is_val], df[is_val]

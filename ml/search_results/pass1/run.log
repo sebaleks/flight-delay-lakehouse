@@ -1,0 +1,57 @@
+warning: `VIRTUAL_ENV=/opt/anaconda3/envs/msds694` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
+2026-08-10 06:35:40,256 INFO ml.model_search: verifying the hist_* recompute against the mart ...
+2026-08-10 06:35:45,070 INFO ml.model_search: recompute check: {'compared': 8144, 'max_abs_rate_diff': 4.718447854656915e-16, 'max_abs_avg_diff': 3.552713678800501e-14, 'n_exact_match': 8144}
+2026-08-10 06:35:45,071 INFO ml.model_search: loading the training window ...
+2026-08-10 06:37:53,817 INFO ml.model_search: loaded 16,678,880 training rows
+2026-08-10 06:37:53,818 INFO ml.model_search: re-deriving hist_* on the fit window (< 2024-05-06) ...
+2026-08-10 06:38:15,135 INFO ml.model_search: fit 15,574,697 rows | val 1,104,183 rows
+2026-08-10 06:38:17,923 INFO ml.model_search: search on 2,500,000 fit / 800,000 val rows, scale_pos_weight 3.817
+2026-08-10 06:41:00,648 INFO ml.model_search: catboost       1/5  PR-AUC 0.51238  ROC 0.72610  (162s)
+2026-08-10 06:41:01,486 INFO ml.tracking: mlflow: uri=sqlite:////Users/sebastiansteen/flight-delay-lakehouse/mlflow.db experiment=flight-delay artifacts=gs://de-flight-project-bronze/mlflow
+2026-08-10 06:41:01,598 INFO ml.tracking: mlflow: logged run 'search:catboost:0' to experiment flight-delay
+2026-08-10 06:44:34,313 INFO ml.model_search: catboost       2/5  PR-AUC 0.51474  ROC 0.72732  (213s)
+2026-08-10 06:44:34,316 INFO ml.tracking: mlflow: uri=sqlite:////Users/sebastiansteen/flight-delay-lakehouse/mlflow.db experiment=flight-delay artifacts=gs://de-flight-project-bronze/mlflow
+2026-08-10 06:44:34,326 INFO ml.tracking: mlflow: logged run 'search:catboost:1' to experiment flight-delay
+2026-08-10 06:48:16,097 INFO ml.model_search: catboost       3/5  PR-AUC 0.51210  ROC 0.72587  (222s)
+2026-08-10 06:48:16,100 INFO ml.tracking: mlflow: uri=sqlite:////Users/sebastiansteen/flight-delay-lakehouse/mlflow.db experiment=flight-delay artifacts=gs://de-flight-project-bronze/mlflow
+2026-08-10 06:48:16,110 INFO ml.tracking: mlflow: logged run 'search:catboost:2' to experiment flight-delay
+2026-08-10 06:54:00,938 INFO ml.model_search: catboost       4/5  PR-AUC 0.51455  ROC 0.72758  (345s)
+2026-08-10 06:54:00,949 INFO ml.tracking: mlflow: uri=sqlite:////Users/sebastiansteen/flight-delay-lakehouse/mlflow.db experiment=flight-delay artifacts=gs://de-flight-project-bronze/mlflow
+2026-08-10 06:54:00,960 INFO ml.tracking: mlflow: logged run 'search:catboost:3' to experiment flight-delay
+2026-08-10 06:57:05,516 INFO ml.model_search: catboost       5/5  PR-AUC 0.50863  ROC 0.72388  (185s)
+2026-08-10 06:57:05,519 INFO ml.tracking: mlflow: uri=sqlite:////Users/sebastiansteen/flight-delay-lakehouse/mlflow.db experiment=flight-delay artifacts=gs://de-flight-project-bronze/mlflow
+2026-08-10 06:57:05,529 INFO ml.tracking: mlflow: logged run 'search:catboost:4' to experiment flight-delay
+2026-08-10 06:57:47,837 INFO ml.model_search: hist_gbdt      1/4  PR-AUC 0.51137  ROC 0.72450  (42s)
+2026-08-10 06:57:47,841 INFO ml.tracking: mlflow: uri=sqlite:////Users/sebastiansteen/flight-delay-lakehouse/mlflow.db experiment=flight-delay artifacts=gs://de-flight-project-bronze/mlflow
+2026-08-10 06:57:47,851 INFO ml.tracking: mlflow: logged run 'search:hist_gbdt:0' to experiment flight-delay
+2026-08-10 06:58:27,970 INFO ml.model_search: hist_gbdt      2/4  PR-AUC 0.51116  ROC 0.72432  (40s)
+2026-08-10 06:58:27,973 INFO ml.tracking: mlflow: uri=sqlite:////Users/sebastiansteen/flight-delay-lakehouse/mlflow.db experiment=flight-delay artifacts=gs://de-flight-project-bronze/mlflow
+2026-08-10 06:58:27,981 INFO ml.tracking: mlflow: logged run 'search:hist_gbdt:1' to experiment flight-delay
+2026-08-10 06:59:16,983 INFO ml.model_search: hist_gbdt      3/4  PR-AUC 0.50975  ROC 0.72366  (49s)
+2026-08-10 06:59:16,986 INFO ml.tracking: mlflow: uri=sqlite:////Users/sebastiansteen/flight-delay-lakehouse/mlflow.db experiment=flight-delay artifacts=gs://de-flight-project-bronze/mlflow
+2026-08-10 06:59:16,996 INFO ml.tracking: mlflow: logged run 'search:hist_gbdt:2' to experiment flight-delay
+2026-08-10 07:00:06,478 INFO ml.model_search: hist_gbdt      4/4  PR-AUC 0.51023  ROC 0.72398  (50s)
+2026-08-10 07:00:06,480 INFO ml.tracking: mlflow: uri=sqlite:////Users/sebastiansteen/flight-delay-lakehouse/mlflow.db experiment=flight-delay artifacts=gs://de-flight-project-bronze/mlflow
+2026-08-10 07:00:06,488 INFO ml.tracking: mlflow: logged run 'search:hist_gbdt:3' to experiment flight-delay
+2026-08-10 07:01:49,281 INFO ml.model_search: extra_trees    1/3  PR-AUC 0.49544  ROC 0.71938  (102s)
+2026-08-10 07:01:49,284 INFO ml.tracking: mlflow: uri=sqlite:////Users/sebastiansteen/flight-delay-lakehouse/mlflow.db experiment=flight-delay artifacts=gs://de-flight-project-bronze/mlflow
+2026-08-10 07:01:49,293 INFO ml.tracking: mlflow: logged run 'search:extra_trees:0' to experiment flight-delay
+2026-08-10 07:03:57,768 INFO ml.model_search: extra_trees    2/3  PR-AUC 0.50324  ROC 0.72370  (128s)
+2026-08-10 07:03:57,772 INFO ml.tracking: mlflow: uri=sqlite:////Users/sebastiansteen/flight-delay-lakehouse/mlflow.db experiment=flight-delay artifacts=gs://de-flight-project-bronze/mlflow
+2026-08-10 07:03:57,781 INFO ml.tracking: mlflow: logged run 'search:extra_trees:1' to experiment flight-delay
+2026-08-10 07:07:25,692 INFO ml.model_search: extra_trees    3/3  PR-AUC 0.49788  ROC 0.72142  (208s)
+2026-08-10 07:07:25,694 INFO ml.tracking: mlflow: uri=sqlite:////Users/sebastiansteen/flight-delay-lakehouse/mlflow.db experiment=flight-delay artifacts=gs://de-flight-project-bronze/mlflow
+2026-08-10 07:07:25,702 INFO ml.tracking: mlflow: logged run 'search:extra_trees:2' to experiment flight-delay
+2026-08-10 07:10:02,842 INFO ml.model_search: random_forest  1/3  PR-AUC 0.50854  ROC 0.72722  (157s)
+2026-08-10 07:10:02,845 INFO ml.tracking: mlflow: uri=sqlite:////Users/sebastiansteen/flight-delay-lakehouse/mlflow.db experiment=flight-delay artifacts=gs://de-flight-project-bronze/mlflow
+2026-08-10 07:10:02,854 INFO ml.tracking: mlflow: logged run 'search:random_forest:0' to experiment flight-delay
+2026-08-10 07:13:06,407 INFO ml.model_search: random_forest  2/3  PR-AUC 0.51134  ROC 0.72809  (184s)
+2026-08-10 07:13:06,410 INFO ml.tracking: mlflow: uri=sqlite:////Users/sebastiansteen/flight-delay-lakehouse/mlflow.db experiment=flight-delay artifacts=gs://de-flight-project-bronze/mlflow
+2026-08-10 07:13:06,420 INFO ml.tracking: mlflow: logged run 'search:random_forest:1' to experiment flight-delay
+2026-08-10 07:18:20,928 INFO ml.model_search: random_forest  3/3  PR-AUC 0.50795  ROC 0.72660  (314s)
+2026-08-10 07:18:20,930 INFO ml.tracking: mlflow: uri=sqlite:////Users/sebastiansteen/flight-delay-lakehouse/mlflow.db experiment=flight-delay artifacts=gs://de-flight-project-bronze/mlflow
+2026-08-10 07:18:20,939 INFO ml.tracking: mlflow: logged run 'search:random_forest:2' to experiment flight-delay
+2026-08-10 07:18:21,385 INFO ml.model_search: ensemble  PR-AUC 0.50925  ROC 0.72712
+2026-08-10 07:18:21,387 INFO ml.tracking: mlflow: uri=sqlite:////Users/sebastiansteen/flight-delay-lakehouse/mlflow.db experiment=flight-delay artifacts=gs://de-flight-project-bronze/mlflow
+2026-08-10 07:18:21,395 INFO ml.tracking: mlflow: logged run 'search:ensemble_rank_blend' to experiment flight-delay
+2026-08-10 07:18:21,396 INFO ml.model_search: wrote /Users/sebastiansteen/flight-delay-lakehouse/ml/search_results/REPORT.md
