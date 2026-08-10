@@ -10,6 +10,17 @@ models:
       - name: airport_key
         tests: [unique, not_null]
 
+  - name: dash_airport_hour_baseline
+    description: >
+      Ops-capacity page source at (airport, day_of_week, dep_hour) grain with
+      ADDITIVE counts/sums and airport display labels; rates must be computed
+      as SUM/SUM (e.g. SUM(n_arr_del15)/SUM(n_with_arr_outcome)) — never
+      averaged. Thin skin over mart_delays_by_airport_hour.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [airport_key, day_of_week, dep_hour]
+
   - name: dash_carrier_reliability
     description: Looker source, one row per carrier (full period).
     columns:
