@@ -34,6 +34,16 @@ def render() -> None:
     )
     shown = df[df["n_flight_legs"] >= min_legs]
 
+    if shown.empty:
+        # idxmax/idxmin below raise "attempt to get argmax of an empty sequence"
+        # on an empty frame, which takes the whole app down (app.py has no error
+        # boundary). Today no slider position can empty this — ATL alone clears
+        # the 100,000 ceiling — so the guard is protection against the data
+        # changing, not a bug a user can currently reach. The route page already
+        # guards the same way.
+        st.warning("No airports carry that much traffic. Lower the minimum flight legs.")
+        return
+
     fig = charts.airport_map(
         shown,
         lat="latitude",

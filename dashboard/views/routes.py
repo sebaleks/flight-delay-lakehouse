@@ -74,7 +74,11 @@ def render() -> None:
                     "cancellation_rate",
                 ]
             ]
-            .sort_values("n_flights", ascending=False)
+            # n_flight_legs, NOT n_flights: this frame is dash_route_drilldown
+            # (route grain). n_flights is the route x CARRIER grain's name and
+            # belongs to the breakdown tab below — mixing them raised a KeyError
+            # that took the whole page down.
+            .sort_values("n_flight_legs", ascending=False)
             .reset_index(drop=True)
         )
         st.dataframe(
@@ -102,10 +106,15 @@ def render() -> None:
             },
         )
 
+        # inside the tab, not after it: at function-body indent these render
+        # below the whole tab container, so the Airline breakdown tab showed a
+        # "routes_filtered.csv" button and a route count belonging to the
+        # other tab.
+        ui.download_button(table, "routes_filtered.csv")
+        st.caption(f"{len(table):,} routes · sorted by traffic.")
+
     with tab_airlines:
         _render_airline_breakdown(df)
-    ui.download_button(table, "routes_filtered.csv")
-    st.caption(f"{len(table):,} routes · sorted by traffic.")
 
     st.divider()
 
