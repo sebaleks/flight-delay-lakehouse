@@ -17,9 +17,10 @@ from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
+from typing import Annotated
 from zoneinfo import ZoneInfo
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from google.cloud import bigquery
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -241,6 +242,57 @@ def predict_one(flight: FlightIn) -> dict:
 def predict_batch(batch: BatchIn) -> list[dict]:
     ctx = _ctx_or_503()
     return predict(ctx, [FlightRequest(**fl.model_dump()) for fl in batch.flights])
+
+
+@app.get("/replay/airport-day")
+def replay_airport_day(
+    origin: str = "ORD", *, flight_date: Annotated[date, Query(alias="date")]
+) -> dict:
+    """Score one airport's HELD-OUT day and return predictions WITH the labels.
+
+    The ops-capacity data source: rows come straight from ml_flight_features
+    (ml/replay.py's loader — features are already in the mart, so no forecast
+    call and no feature assembly), scored through the same artifacts and the
+    same coercion gates as request serving. The outcome is known for these
+    flights, so the response can put "the model expected N ± sd delayed
+    departures" next to what actually happened.
+
+    GUARD: only held-out dates are served. A training-window date 404s — a
+    capacity demo silently scoring rows the model trained on would be the
+    exact failure this project is about. The loader already filters on the
+    mart's split column; the date check below makes the refusal explicit and
+    the returned-window assert makes it provable.
+    """
+    from ml import replay
+
+    ctx = _ctx_or_503()
+    origin = origin.upper()
+    if origin not in ctx.airports.index:
+        raise HTTPException(404, f"unknown origin {origin!r}")
+
+    # the split boundary comes from the run's own metrics.json when present
+    # (the artifacts define their test window); HOLDOUT_FLOOR is the fallback
+    # for runs that predate the metadata
+    m = _artifact_json(str(ctx.models.artifacts_dir), "metrics.json") or {}
+    test_start = (m.get("split") or {}).get("test_date_min") or str(replay.HOLDOUT_FLOOR.date())
+    if flight_date < date.fromisoformat(test_start):
+        raise HTTPException(
+            404,
+            f"{flight_date} is in the training window — replay serves held-out "
+            f"dates only (test window starts {test_start})",
+        )
+
+    try:
+        scored = replay.score_airport_day(ctx, origin, flight_date.isoformat())
+    except replay.NoHeldOutRows:
+        raise HTTPException(404, f"no held-out flights for {origin} on {flight_date}") from None
+    # belt behind the WHERE clause and the date check: prove every returned
+    # row is held-out, don't assume it (mirrors ml/replay.py's CLI assert)
+    if scored["flight_date"].min() < replay.HOLDOUT_FLOOR:
+        raise RuntimeError("training row leaked into /replay/airport-day")
+    return replay.airport_day_payload(
+        origin, flight_date.isoformat(), scored, ctx.models.artifacts_dir.name
+    )
 
 
 @app.get("/demo/airport-departures")

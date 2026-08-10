@@ -32,6 +32,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import date
+from urllib.parse import urlencode
 
 import requests
 
@@ -115,9 +116,15 @@ def _get(base_url: str, path: str, timeout: float) -> dict:
         headers["Authorization"] = f"Bearer {token}"
     try:
         r = requests.get(url, headers=headers, timeout=timeout)
-        r.raise_for_status()
+    except requests.Timeout as exc:
+        raise PredictorUnavailable(f"the predictor did not respond within {timeout:.0f}s") from exc
     except requests.RequestException as exc:
         raise PredictorUnavailable(f"could not reach the predictor: {exc}") from exc
+    if r.status_code >= 400:
+        # the server's own detail is the useful part (e.g. the replay
+        # endpoint's "training window starts ..." refusal) — surface it,
+        # exactly as _post does, rather than a bare status line
+        raise PredictorUnavailable(f"predictor returned HTTP {r.status_code}: {r.text[:300]}")
     return r.json()
 
 
@@ -155,6 +162,24 @@ def predict_one(
         has_origin_weather=bool(raw.get("has_origin_weather", False)),
         basis=dict(raw.get("prediction_basis") or {}),
     )
+
+
+def replay_airport_day(
+    base_url: str, *, origin: str, flight_date: date, timeout: float = COLD_START_TIMEOUT_S
+) -> dict:
+    """One airport's HELD-OUT day: per-flight predictions with labels alongside.
+
+    The ops page's data source — replay mode, not live scoring: the server
+    reads the held-out mart rows and 404s any training-window date. No
+    consumer projection here: the ops page aggregates the raw probabilities
+    (Σp per bank) and shows labels as reported outcomes, and its per-flight
+    minutes are never rendered as point estimates.
+    """
+    q = urlencode({"origin": origin, "date": flight_date.isoformat()})
+    raw = _get(base_url, f"/replay/airport-day?{q}", timeout)
+    if not isinstance(raw, dict) or not isinstance(raw.get("flights"), list):
+        raise PredictorUnavailable("unexpected replay response shape")
+    return raw
 
 
 def calibration(base_url: str, timeout: float = COLD_START_TIMEOUT_S) -> dict:

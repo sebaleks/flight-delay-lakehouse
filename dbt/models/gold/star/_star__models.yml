@@ -88,6 +88,27 @@ models:
       - name: route
         tests: [unique, not_null]
 
+  - name: mart_delays_by_airport_hour
+    description: >
+      Ops-capacity baseline at (origin_airport_key, day_of_week 1=Mon..7=Sun,
+      scheduled departure hour) grain, ADDITIVE counts and sums only — no
+      pre-divided rates; consumers compute rates as SUM/SUM so rollups can
+      never average averages. Carries both departure (dep_del15) and arrival
+      (arr_del15) outcome counts. TRAINING WINDOW ONLY (pre-cutoff, same var
+      as int_historical_delay_rates): the ops page shows these counts as what
+      history alone would predict for a held-out day, so the history must end
+      where the holdout begins. The single fact_flights aggregation at this
+      grain; dash_airport_hour_baseline is a thin skin over this table.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [origin_airport_key, day_of_week, crs_dep_hour]
+    columns:
+      - name: origin_airport_key
+        tests: [not_null]
+      - name: n_with_arr_outcome
+        tests: [not_null]
+
   - name: mart_delays_by_schedule
     description: >
       Schedule-grain mart (year, month, day_of_week 1=Mon..7=Sun, scheduled
