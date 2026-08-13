@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Predicting Flight Delays with a Data Lakehouse</title>
+<style>
+  :root {
+    --navy: #1f3864;
+    --sky: #3e8ed0;
+    --ink: #26313d;
+    --muted: #5a6472;
+    --tint: #eaf3fb;
+    --line: #d7e4f0;
+    --green: #2e7d32;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "Avenir Next", Avenir, "Segoe UI", Helvetica, Arial, sans-serif;
+    color: var(--ink);
+    background: #ffffff;
+    line-height: 1.65;
+  }
+  .banner {
+    background: linear-gradient(120deg, #1f3864 0%, #2f6ea8 55%, #3e8ed0 100%);
+    color: #fff;
+    padding: 3.5rem 1.5rem 3rem;
+    text-align: center;
+  }
+  .banner .plane { font-size: 2.6rem; display: block; margin-bottom: 0.6rem; }
+  .banner h1 { margin: 0 auto 0.7rem; font-size: 2.1rem; max-width: 44rem; line-height: 1.25; }
+  .banner p { margin: 0.25rem 0; opacity: 0.92; font-size: 1rem; }
+  .banner .stats { margin-top: 1.4rem; display: flex; gap: 2.2rem; justify-content: center; flex-wrap: wrap; }
+  .banner .stat b { display: block; font-size: 1.5rem; }
+  .banner .stat span { font-size: 0.82rem; opacity: 0.85; }
+  main { max-width: 46rem; margin: 0 auto; padding: 2.2rem 1.4rem 3.5rem; }
+  h2 {
+    color: var(--navy);
+    font-size: 1.45rem;
+    margin: 2.4rem 0 0.7rem;
+  }
+  h2 .tag { font-size: 1.15rem; margin-right: 0.45rem; }
+  p { margin: 0 0 1.05rem; }
+  figure { margin: 1.6rem 0; }
+  figure img {
+    width: 100%;
+    height: auto;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: #fff;
+    padding: 10px;
+  }
+  figcaption { font-size: 0.85rem; color: var(--muted); text-align: center; margin-top: 0.5rem; }
+  .callout {
+    background: var(--tint);
+    border-radius: 12px;
+    padding: 1rem 1.25rem;
+    margin: 1.4rem 0;
+    font-size: 0.97rem;
+  }
+  .callout b { color: var(--navy); }
+  code { background: var(--tint); padding: 0.1em 0.35em; border-radius: 5px; font-size: 0.92em; }
+  footer {
+    border-top: 1px solid var(--line);
+    margin-top: 3rem;
+    padding-top: 1.4rem;
+    font-size: 0.95rem;
+    color: var(--muted);
+  }
+  footer a, main a { color: var(--sky); }
+</style>
+</head>
+<body>
+
+<header class="banner">
+  <span class="plane">&#9992;&#65039;</span>
+  <h1>Predicting Flight Delays with a Data Lakehouse</h1>
+  <p>Aidan Percy &amp; Sebastian Steen · MSDS 681, University of San Francisco · August 2026</p>
+  <div class="stats">
+    <div class="stat"><b>20.66M</b><span>flight legs, 2022&ndash;2024</span></div>
+    <div class="stat"><b>74&times;</b><span>less data scanned</span></div>
+    <div class="stat"><b>0.739</b><span>held-out ROC-AUC</span></div>
+  </div>
+</header>
+
+<main>
+
+<h2><span class="tag">&#128680;</span>Problem</h2>
+<p>We&rsquo;ve all been there: you&rsquo;re at the gate, boarding starts in 30 minutes, and an announcement comes over the loudspeaker saying your flight is delayed. About 20% of U.S. flights are delayed, meaning they arrive 15 or more minutes late, with passengers, airlines, and airports only finding out as it happens. The predictive signals like weather and aircraft histories, however, are publicly available; what&rsquo;s missing is a product that joins them all together.</p>
+
+<h2><span class="tag">&#128506;&#65039;</span>Domain</h2>
+<p>Our chosen domain for our data lakehouse project is U.S. domestic flights, with the goal of analyzing historical late flights and predicting whether a future flight will be late. We utilized data from the Bureau of Transportation Statistics (BTS) to perform analysis across carriers, airports, seasonality, and more, while adding machine learning on top of it to predict upcoming flight delays.</p>
+
+<h2><span class="tag">&#128202;</span>Dataset</h2>
+<p>The core historical data we used was the BTS&rsquo; on-time performance data, which covers all 20.66 million flight legs of U.S. scheduled domestic flights from 2022 to 2024. We paired this historical dataset with the National Oceanic and Atmospheric Administration&rsquo;s (NOAA) hourly weather observations across 1,165 airport-adjacent stations. The combined data includes the weather at the departure airport at the scheduled departure time, totaling about 34 GB sitting in immutable CSVs in the bronze layer.</p>
+
+<h2><span class="tag">&#127959;&#65039;</span>Architecture</h2>
+<figure>
+  <img src="architecture.png" alt="Architecture diagram: BTS, NOAA, and seed sources flow into a bronze GCS layer, then a silver and gold BigQuery layer built by dbt, serving a Streamlit dashboard, XGBoost training and API, and MLflow.">
+  <figcaption>End-to-end data flow: sources &rarr; bronze (GCS) &rarr; silver &rarr; gold (BigQuery) &rarr; dashboard, model, and API.</figcaption>
+</figure>
+<p>Our architecture follows a bronze, silver, and gold design, shown in the diagram above. Raw CSVs from BTS and NOAA land in a Google Cloud Platform (GCP) Cloud Storage bucket, partitioned by year and month. BigQuery reads these files in place through external tables, so the raw data can be queried without copying it or editing it. Cleaning happens in the silver layer, where columns get types assigned to them, duplicates are removed, keys are standardized, and each flight is matched to a weather observation at its departure airport.</p>
+<p>In the gold layer, two different consumers are served from the same layer. A star schema is used for analysis work, where a <code>fact_flights</code> table of ~21 million flight legs is surrounded by airport, carrier, and date dimensions. The model layer, in contrast, uses a single wide feature table with everything pre-joined. From the gold layer, a Streamlit dashboard running on Cloud Run and an XGBoost model trained from the features are served through an API.</p>
+
+<h2><span class="tag">&#128295;</span>Implementation</h2>
+<p>All of our silver-to-gold transformations run as SQL in BigQuery and are managed by dbt. In total there are 31 dbt models backed by around 124 declared tests, plus 4 custom tests that guard against data leakage into the model&rsquo;s features. Dagster sits on top of everything and wires ingestion, dbt, and model training into 38 assets with data quality checks between the steps. Deployments happen automatically from GitHub on every push, so there is no infrastructure for us to maintain.</p>
+<p>The main schema decision we made was using a star schema instead of a snowflake. Snowflaking splits dimensions into sub-tables to save storage and protect against update anomalies. In our case the dimensions are tiny (374 airports, 17 carriers, 1,096 dates) compared to the 21-million-row fact table, so normalizing them would have saved kilobytes. It also would have added a join to every dashboard query, which matters when BigQuery bills by bytes scanned rather than storage. Since dbt rebuilds silver and gold from bronze instead of updating tables in place, there were also no update anomalies to protect against.</p>
+
+<h2><span class="tag">&#9889;</span>Performance Benchmark</h2>
+<figure>
+  <img src="benchmark.png" alt="Benchmark bars: baseline scans 554.0 MB, optimized table scans 7.45 MB; cost per 100,000 queries falls from $315 to $9.54, and median runtime from 425 to 249 ms.">
+  <figcaption>Bytes scanned by the same dashboard query, before and after partitioning + clustering.</figcaption>
+</figure>
+<p>We decided to focus on one optimization decision: partitioning <code>fact_flights</code> by month and clustering it on origin, destination, and carrier, which are the columns our dashboard filters on. We compared it against a plain unpartitioned copy of the same table using the dashboard&rsquo;s carrier delay ranking query for Chicago O&rsquo;Hare Airport in June 2024. We measured the time and cost and found that the optimized table scanned 7.45 MB versus 554 MB for the baseline, a 74&times; reduction. Since BigQuery bills by bytes scanned, that works out to $315 down to $9.54 per 100,000 queries (near the minimum query cost).</p>
+
+<h2><span class="tag">&#129302;</span>Deep Dive Capability and Evaluation</h2>
+<p>For our deep dive we chose to do an ML workflow and built a pipeline that trains a delay prediction model from the data lakehouse. The point of the design is that analytics and ML are served from the same data without duplication: the dashboard reads the star schema, the model reads the flat feature table, and both are built from the same shared tables underneath. The model reads from the gold layer rather than raw or silver data because that is where our rules are enforced. A single cutoff date (July 1, 2024) splits training from testing, so the model trains on earlier flights and is evaluated on later unseen ones. The hard constraint is that every feature must be knowable before departure, with 4 dbt tests enforcing this automatically.</p>
+<p>We built the features up in stages, with daily weather giving us a starting point; switching to hourly weather at the scheduled departure time improved it, and the biggest jump came from features that track an aircraft through its day, since one late plane drags its later flights with it. That last group is also where we found leakage: the data records which plane actually flew, which is only known after the fact, and a last-minute plane swap is itself a signal that something went wrong. We restricted those features to flights where the actual plane matched the schedule, gave up about 0.01 of PR-AUC, and kept 89% of the improvement.</p>
+<div class="callout"><b>A model that uses after-the-fact information isn&rsquo;t predicting &mdash; it&rsquo;s remembering.</b></div>
+<p>On the held-out test period the classifier reached a ROC-AUC of 0.739 and a PR-AUC of 0.465, against a base delay rate of 19.7%, so flights it flags are about 2.4 times more likely to be delayed than average. For comparison, a logistic regression baseline on the same features scored 0.665 and 0.338. We also calibrated the output probabilities, which cut the expected calibration error from 0.227 to 0.017 without changing the rankings, so a predicted 30% delay risk actually means 30%.</p>
+
+<h2><span class="tag">&#128173;</span>Reflection &amp; Incorporation of Feedback</h2>
+<p>We built a star schema for analytics and a separate flattened training table for the model. Since we train infrequently and then serve, the second gold table is mostly a reshaped copy of the first, with the same leakage guards applied twice. If retraining is not on a frequent schedule, the training table is a one-time extract rather than a maintained asset. We could have written it as a single query against <code>fact_flights</code> and the dimensions, materialized the result once, and kept it as an artifact sitting next to the model rather than as a dbt model that rebuilds on every run.</p>
+
+<footer>
+  <p>Code, models, and benchmark methodology: <a href="https://github.com/sebaleks/flight-delay-lakehouse">github.com/sebaleks/flight-delay-lakehouse</a></p>
+  <p>Written by Aidan Percy and Sebastian Steen for MSDS 681 (Data Lakehouse), University of San Francisco.</p>
+</footer>
+
+</main>
+</body>
+</html>
