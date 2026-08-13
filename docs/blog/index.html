@@ -101,7 +101,7 @@
   <figcaption>End-to-end data flow: sources &rarr; bronze (GCS) &rarr; silver &rarr; gold (BigQuery) &rarr; dashboard, model, and API.</figcaption>
 </figure>
 <p>Our architecture follows a bronze, silver, and gold design, shown in the diagram above. Raw CSVs from BTS and NOAA land in a Google Cloud Platform (GCP) Cloud Storage bucket, partitioned by year and month. BigQuery reads these files in place through external tables, so the raw data can be queried without copying it or editing it. Cleaning happens in the silver layer, where columns get types assigned to them, duplicates are removed, keys are standardized, and each flight is matched to a weather observation at its departure airport.</p>
-<p>In the gold layer, two different consumers are served from the same layer. A star schema is used for analysis work, where a <code>fact_flights</code> table of ~21 million flight legs is surrounded by airport, carrier, and date dimensions. The model layer, in contrast, uses a single wide feature table with everything pre-joined. From the gold layer, a Streamlit dashboard running on Cloud Run and an XGBoost model trained from the features are served through an API.</p>
+<p>In the gold layer, two different consumers are served from the same layer. A star schema is used for analysis work, where a <code>fact_flights</code> table of ~21 million flight legs is surrounded by airport, carrier, and date dimensions. The model layer, in contrast, uses a single wide feature table with everything pre-joined. From the gold layer, a <a href="https://flight-delay-dashboard-881765920791.us-central1.run.app/">Streamlit dashboard</a> running on Cloud Run and an XGBoost model trained from the features are served through an API.</p>
 
 <h2><span class="tag">&#128295;</span>Implementation</h2>
 <p>All of our silver-to-gold transformations run as SQL in BigQuery and are managed by dbt. In total there are 31 dbt models backed by around 124 declared tests, plus 4 custom tests that guard against data leakage into the model&rsquo;s features. Dagster sits on top of everything and wires ingestion, dbt, and model training into 38 assets with data quality checks between the steps. Deployments happen automatically from GitHub on every push, so there is no infrastructure for us to maintain.</p>
@@ -124,6 +124,7 @@
 <p>We built a star schema for analytics and a separate flattened training table for the model. Since we train infrequently and then serve, the second gold table is mostly a reshaped copy of the first, with the same leakage guards applied twice. If retraining is not on a frequent schedule, the training table is a one-time extract rather than a maintained asset. We could have written it as a single query against <code>fact_flights</code> and the dimensions, materialized the result once, and kept it as an artifact sitting next to the model rather than as a dbt model that rebuilds on every run.</p>
 
 <footer>
+  <p>Try the live dashboard: <a href="https://flight-delay-dashboard-881765920791.us-central1.run.app/">flight-delay-dashboard on Cloud Run</a></p>
   <p>Code, models, and benchmark methodology: <a href="https://github.com/sebaleks/flight-delay-lakehouse">github.com/sebaleks/flight-delay-lakehouse</a></p>
   <p>Written by Aidan Percy and Sebastian Steen for MSDS 681 (Data Lakehouse), University of San Francisco.</p>
 </footer>
